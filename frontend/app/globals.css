@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------
+   FinMate AI design tokens.
+
+   Palette is a "modern ledger" -- deliberately not the cream+terracotta
+   or near-black+acid-accent looks that AI-generated UIs default to.
+   Paper is a cool, pale sage-grey (not cream); the brand color is a
+   deep ledger teal; brass is reserved *only* for this app's signature
+   trust element (the "Verified" strip -- see VerifiedStrip.tsx), never
+   used as a general accent, so it stays meaningful.
+------------------------------------------------------------------------ */
+
+:root {
+  --color-paper: #f3f4ee;
+  --color-surface: #ffffff;
+  --color-ink: #14181a;
+  --color-ink-soft: #4b5563;
+  --color-mist: #6b7280;
+  --color-border: #e1e3da;
+  --color-ledger: #1e5f52;
+  --color-ledger-dark: #143f37;
+  --color-ledger-soft: #e6efec;
+  --color-brass: #c08a2e;
+  --color-brass-soft: #f6ecd9;
+  --color-brick: #b3452b;
+  --color-brick-soft: #f8e9e4;
+}
+
+@theme inline {
+  --color-paper: var(--color-paper);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-mist: var(--color-mist);
+  --color-border: var(--color-border);
+  --color-ledger: var(--color-ledger);
+  --color-ledger-dark: var(--color-ledger-dark);
+  --color-ledger-soft: var(--color-ledger-soft);
+  --color-brass: var(--color-brass);
+  --color-brass-soft: var(--color-brass-soft);
+  --color-brick: var(--color-brick);
+  --color-brick-soft: var(--color-brick-soft);
+
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-plex-mono);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Tabular figures for every monetary/numeric readout -- see globals.css
+   token comment above: this is the one deliberate typographic risk the
+   design takes, grounded in the subject (a finance app's numbers should
+   line up like a printed statement, not wobble with proportional
+   widths). Applied via the .tabular-nums utility class, not globally,
+   so prose text keeps Inter's normal proportional numerals. */
+.tabular-nums {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+::selection {
+  background: var(--color-ledger-soft);
+  color: var(--color-ledger-dark);
+}
+
+/* Respect reduced-motion preferences (see frontend-design skill's
+   "quality floor" note) -- every transition/animation in this app is
+   effectively disabled for anyone who has asked their OS for that. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Minimal prose styling for assistant messages (finmate's formatter
+   agent output: short paragraphs, occasional bold/emphasis, and lists --
+   never deeply nested or exotic enough to justify pulling in the full
+   @tailwindcss/typography plugin for six selectors). */
+.prose-chat p {
+  margin: 0 0 0.6em;
+}
+.prose-chat p:last-child {
+  margin-bottom: 0;
+}
+.prose-chat strong {
+  font-weight: 600;
+}
+.prose-chat ul,
+.prose-chat ol {
+  margin: 0.4em 0 0.6em;
+  padding-left: 1.25em;
+}
+.prose-chat ul {
+  list-style: disc;
+}
+.prose-chat ol {
+  list-style: decimal;
+}
+.prose-chat li {
+  margin: 0.2em 0;
+}
+.prose-chat li > p {
+  margin: 0;
+}
+.prose-chat code {
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.prose-chat a {
+  color: var(--color-ledger);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Thin, quiet scrollbars matching the ledger aesthetic (WebKit-based
+   browsers only -- this is progressive enhancement, not load-bearing). */
+.themed-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.themed-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.themed-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 999px;
+}
+.themed-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-mist);
+}
