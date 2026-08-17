@@ -1,0 +1,151 @@
+{
+  "_comment": "Hand-labeled golden set for scripts/eval_rag.py. Every relevant_source_ids entry was cross-checked programmatically against data/synthetic_transactions.csv for user_id=demo_user (48 rows) -- see README 'Evaluation harness' for how. filters (when present) map directly onto finmate.rag.retrieve()'s own keyword parameters (category/start_date/end_date), matching how finmate/agents/rag_agent.py actually receives structured filters (from the Router agent) rather than expecting them to be inferred from the query text.",
+  "user_id": "demo_user",
+  "queries": [
+    {
+      "id": "exact_rent_payment",
+      "query_type": "exact_keyword",
+      "query": "rent payment",
+      "filters": {},
+      "relevant_source_ids": ["txn_1003", "txn_1026"]
+    },
+    {
+      "id": "exact_netflix",
+      "query_type": "exact_keyword",
+      "query": "Netflix subscription",
+      "filters": {},
+      "relevant_source_ids": ["txn_1007", "txn_1030"]
+    },
+    {
+      "id": "exact_car_loan",
+      "query_type": "exact_keyword",
+      "query": "car loan EMI",
+      "filters": {},
+      "relevant_source_ids": ["txn_1005", "txn_1028"]
+    },
+    {
+      "id": "exact_gym",
+      "query_type": "exact_keyword",
+      "query": "gym membership",
+      "filters": {},
+      "relevant_source_ids": ["txn_1010", "txn_1033"]
+    },
+    {
+      "id": "exact_credit_card_bill",
+      "query_type": "exact_keyword",
+      "query": "credit card bill payment",
+      "filters": {},
+      "relevant_source_ids": ["txn_1023", "txn_1046"]
+    },
+    {
+      "id": "exact_salary",
+      "query_type": "exact_keyword",
+      "query": "salary credit",
+      "filters": {},
+      "relevant_source_ids": ["txn_1001", "txn_1024"]
+    },
+    {
+      "id": "exact_health_insurance",
+      "query_type": "exact_keyword",
+      "query": "health insurance premium",
+      "filters": {},
+      "relevant_source_ids": ["txn_1004", "txn_1027"]
+    },
+    {
+      "id": "semantic_food_expenses",
+      "query_type": "semantic",
+      "query": "food expenses",
+      "filters": {},
+      "relevant_source_ids": [
+        "txn_1015", "txn_1016", "txn_1017", "txn_1018", "txn_1038", "txn_1047", "txn_1039", "txn_1040", "txn_1041",
+        "txn_1011", "txn_1012", "txn_1013", "txn_1014", "txn_1034", "txn_1035", "txn_1036", "txn_1037"
+      ],
+      "note": "Dining out + Groceries, all-time. No transaction description or category literally contains 'food' or 'expenses' -- this is the spec's own worked example (Zomato/Swiggy/BigBasket should surface). 17 gold items on purpose: Recall@5/@10 have a natural, expected ceiling here (5/17, 10/17) even for a perfect ranker -- see README."
+    },
+    {
+      "id": "semantic_transportation",
+      "query_type": "semantic",
+      "query": "transportation costs",
+      "filters": {},
+      "relevant_source_ids": ["txn_1019", "txn_1020", "txn_1042", "txn_1043"],
+      "note": "Category is 'Transport / fuel' -- 'transportation' does not exact-token-match 'transport' under simple (non-stemming) tokenization, so this is a genuine lexical gap, not just a paraphrase."
+    },
+    {
+      "id": "semantic_online_retail",
+      "query_type": "semantic",
+      "query": "online retail purchases",
+      "filters": {},
+      "relevant_source_ids": ["txn_1021", "txn_1022", "txn_1044", "txn_1045", "txn_1048"],
+      "note": "Shopping category: Amazon.in, Myntra, and the Apple Store MacBook repair (categorized Shopping in the seed data)."
+    },
+    {
+      "id": "filter_groceries_july",
+      "query_type": "category_date_filter",
+      "query": "groceries",
+      "filters": {"start_date": "2026-07-01", "end_date": "2026-07-31"},
+      "relevant_source_ids": ["txn_1034", "txn_1035", "txn_1036", "txn_1037"]
+    },
+    {
+      "id": "filter_dining_category",
+      "query_type": "category_date_filter",
+      "query": "dining",
+      "filters": {"category": "Dining out"},
+      "relevant_source_ids": ["txn_1015", "txn_1016", "txn_1017", "txn_1018", "txn_1038", "txn_1047", "txn_1039", "txn_1040", "txn_1041"]
+    },
+    {
+      "id": "filter_subscriptions_june",
+      "query_type": "category_date_filter",
+      "query": "subscription",
+      "filters": {"start_date": "2026-06-01", "end_date": "2026-06-30"},
+      "relevant_source_ids": ["txn_1007", "txn_1008", "txn_1009", "txn_1010"]
+    },
+    {
+      "id": "filter_rent_category_no_query_text",
+      "query_type": "category_date_filter",
+      "query": "",
+      "filters": {"category": "Rent"},
+      "relevant_source_ids": ["txn_1003", "txn_1026"],
+      "note": "Empty query + category filter only -- exercises the 'metadata-only' floor deliberately, not the ranking stages."
+    },
+    {
+      "id": "filter_food_spending_july",
+      "query_type": "category_date_filter",
+      "query": "food spending",
+      "filters": {"start_date": "2026-07-01", "end_date": "2026-07-31"},
+      "relevant_source_ids": ["txn_1038", "txn_1047", "txn_1039", "txn_1040", "txn_1041", "txn_1034", "txn_1035", "txn_1036", "txn_1037"],
+      "note": "Semantic query combined with a date filter -- July-only version of semantic_food_expenses."
+    },
+    {
+      "id": "filter_debt_payment_category",
+      "query_type": "category_date_filter",
+      "query": "payment",
+      "filters": {"category": "Debt payment"},
+      "relevant_source_ids": ["txn_1005", "txn_1023", "txn_1028", "txn_1046"],
+      "note": "'payment' literally matches 'Credit card bill payment' but not 'Car loan EMI - HDFC Bank' by description alone -- the category filter is what guarantees all 4 are candidates in the first place."
+    },
+    {
+      "id": "anomaly_duplicate_charges",
+      "query_type": "anomaly",
+      "query": "duplicate charges",
+      "filters": {},
+      "relevant_source_ids": ["txn_1038", "txn_1047"],
+      "note": "Planted anomaly: two identical Zomato charges on the same day (2026-07-06)."
+    },
+    {
+      "id": "anomaly_subscription_price_increase",
+      "query_type": "anomaly",
+      "query": "subscription price increase",
+      "filters": {},
+      "relevant_source_ids": ["txn_1007", "txn_1030"],
+      "note": "Planted anomaly: Netflix goes from 499 (June) to 649 (July) -- both transactions must surface for the increase to be visible."
+    },
+    {
+      "id": "anomaly_large_one_off",
+      "query_type": "anomaly",
+      "query": "unusually large one-off expense",
+      "filters": {},
+      "relevant_source_ids": ["txn_1048"],
+      "note": "Planted anomaly: Apple Store MacBook repair, -18500, far outside this user's normal transaction range."
+    }
+  ]
+}

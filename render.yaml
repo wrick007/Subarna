@@ -1,0 +1,48 @@
+# Render Blueprint -- https://render.com/docs/blueprint-spec
+#
+# Deploys the FastAPI backend only (backend/). The frontend (frontend/)
+# is a static Next.js app and belongs on Vercel instead -- see
+# DEPLOYMENT.md for both halves and why they're split this way.
+#
+# Using this file: push it to your repo's root, then in the Render
+# Dashboard choose "New +" -> "Blueprint" and point it at your repo.
+# Render finds this file automatically. You'll be prompted for the one
+# `sync: false` value below (your LLM provider's API key) since Render
+# never stores secrets in a file you might commit to Git.
+#
+# Persistent disk: included below on the Starter plan so
+# data/finmate.db and the optional Qdrant vector index survive restarts
+# and redeploys. Costs ~$7/mo for the service and a small amount for the
+# disk itself (see Render's current pricing page). If you'd rather start
+# free and accept that demo data resets on every redeploy (fine for a
+# portfolio/demo deployment -- just re-run POST /api/users/seed-demo-data
+# afterward), delete the `disk:` block below and change `plan: starter`
+# to `plan: free`. Free-tier services also spin down after 15 minutes of
+# inactivity, with a ~30-60s cold start on the next request.
+
+services:
+  - type: web
+    name: finmate-backend
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: FINMATE_LLM_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false # you'll be prompted for this in the Render dashboard
+      - key: FINMATE_FRONTEND_ORIGINS
+        value: https://your-frontend.vercel.app # update after your Vercel deploy -- see DEPLOYMENT.md
+      - key: FINMATE_DB_PATH
+        value: /app/data/finmate.db
+      - key: FINMATE_QDRANT_PATH
+        value: /app/data/qdrant_store
+      - key: FINMATE_WARM_UP_ON_STARTUP
+        value: "true"
+    disk:
+      name: finmate-data
+      mountPath: /app/data
+      sizeGB: 1

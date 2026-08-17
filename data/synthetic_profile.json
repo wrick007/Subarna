@@ -1,0 +1,88 @@
+{
+  "user_id": "demo_user",
+  "currency": "INR",
+  "monthly_income": 125000,
+  "income_sources": [
+    {"name": "Primary salary - Acme Analytics Pvt Ltd", "monthly_amount": 110000, "pay_frequency": "monthly"},
+    {"name": "Freelance design work", "monthly_amount": 15000, "pay_frequency": "irregular"}
+  ],
+  "fixed_expenses": [
+    {"name": "Rent", "amount": 32000, "due_day": 1},
+    {"name": "Health insurance premium", "amount": 2400, "due_day": 5},
+    {"name": "Car loan EMI", "amount": 9500, "due_day": 7},
+    {"name": "Home wifi", "amount": 1200, "due_day": 10}
+  ],
+  "variable_expenses": [
+    {"name": "Groceries", "typical_monthly_amount": 14000},
+    {"name": "Dining out", "typical_monthly_amount": 9000},
+    {"name": "Transport / fuel", "typical_monthly_amount": 6000},
+    {"name": "Shopping", "typical_monthly_amount": 8000}
+  ],
+  "accounts": [
+    {"name": "HDFC Checking", "type": "checking", "balance": 68500},
+    {"name": "HDFC Savings", "type": "savings", "balance": 210000}
+  ],
+  "debts": [
+    {
+      "name": "Car loan - Maruti Suzuki Nexa",
+      "principal": 450000,
+      "annual_interest_rate_pct": 9.5,
+      "term_months": 60,
+      "monthly_payment": 9500,
+      "remaining_term_months": 34
+    },
+    {
+      "name": "Credit card revolving balance",
+      "principal": 32000,
+      "annual_interest_rate_pct": 36,
+      "term_months": 12,
+      "monthly_payment": 3200,
+      "remaining_term_months": 11
+    }
+  ],
+  "investments": [
+    {"name": "Nifty 50 Index Fund SIP", "type": "mutual_fund", "current_value": 185000, "asset_class": "equity"},
+    {"name": "PPF", "type": "government_scheme", "current_value": 240000, "asset_class": "fixed_income"},
+    {"name": "Company RSUs (vested)", "type": "equity", "current_value": 95000, "asset_class": "equity"}
+  ],
+  "subscriptions": [
+    {"name": "Netflix", "monthly_amount": 649},
+    {"name": "Spotify", "monthly_amount": 119},
+    {"name": "Amazon Prime", "monthly_amount": 179},
+    {"name": "Gym membership", "monthly_amount": 1800}
+  ],
+  "financial_goals": [
+    {
+      "name": "Emergency fund (6 months expenses)",
+      "target_amount": 400000,
+      "current_amount": 210000,
+      "deadline": "2027-06-01",
+      "months_remaining": 10
+    },
+    {
+      "name": "Japan trip",
+      "target_amount": 250000,
+      "current_amount": 40000,
+      "deadline": "2027-03-01",
+      "months_remaining": 7
+    },
+    {
+      "name": "Down payment - apartment",
+      "target_amount": 2000000,
+      "current_amount": 300000,
+      "deadline": "2030-01-01",
+      "months_remaining": 41
+    }
+  ],
+  "monthly_budget": {
+    "Groceries": 13000,
+    "Dining out": 7000,
+    "Transport / fuel": 6000,
+    "Shopping": 6000,
+    "Subscriptions": 2500,
+    "Rent": 32000
+  },
+  "risk_preferences": {"stated_risk_tolerance": "moderate", "notes": "prefers not to lose principal on emergency fund"},
+  "financial_preferences": {"preferred_debt_payoff_strategy": "highest_interest_first"},
+  "profile_last_updated": ""
+}

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+data/finmate.db
+data/qdrant_store/
+data/eval_finmate.db
+data/eval_qdrant_store/
+data/rag_eval_results.json
+*.egg-info/
+.pytest_cache/
+.DS_Store
+node_modules/
+backend/data/qdrant_store/

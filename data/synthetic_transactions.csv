@@ -1,0 +1,49 @@
+user_id,date,description,amount,currency,category,account,type,source_id
+demo_user,2026-06-01,Salary credit - Acme Analytics Pvt Ltd,110000,INR,income,HDFC Checking,income,txn_1001
+demo_user,2026-06-01,Rent payment - landlord NEFT,-32000,INR,Rent,HDFC Checking,expense,txn_1003
+demo_user,2026-06-03,Gold's Gym membership,-1800,INR,Subscriptions,HDFC Checking,expense,txn_1010
+demo_user,2026-06-04,BigBasket grocery order,-3400,INR,Groceries,HDFC Checking,expense,txn_1011
+demo_user,2026-06-05,Health insurance premium - Star Health,-2400,INR,Insurance,HDFC Checking,expense,txn_1004
+demo_user,2026-06-06,Zomato - dinner order,-650,INR,Dining out,HDFC Checking,expense,txn_1015
+demo_user,2026-06-07,Car loan EMI - HDFC Bank,-9500,INR,Debt payment,HDFC Checking,expense,txn_1005
+demo_user,2026-06-08,Indian Oil - fuel,-3000,INR,Transport / fuel,HDFC Checking,expense,txn_1019
+demo_user,2026-06-10,ACT Fibernet - home wifi,-1200,INR,Utilities,HDFC Checking,expense,txn_1006
+demo_user,2026-06-11,BigBasket grocery order,-3400,INR,Groceries,HDFC Checking,expense,txn_1012
+demo_user,2026-06-13,Swiggy - lunch order,-420,INR,Dining out,HDFC Checking,expense,txn_1016
+demo_user,2026-06-14,Netflix subscription,-499,INR,Subscriptions,HDFC Checking,expense,txn_1007
+demo_user,2026-06-15,Amazon.in order,-3200,INR,Shopping,HDFC Checking,expense,txn_1021
+demo_user,2026-06-16,Spotify Premium,-119,INR,Subscriptions,HDFC Checking,expense,txn_1008
+demo_user,2026-06-18,Amazon Prime membership,-179,INR,Subscriptions,HDFC Checking,expense,txn_1009
+demo_user,2026-06-18,BigBasket grocery order,-3400,INR,Groceries,HDFC Checking,expense,txn_1013
+demo_user,2026-06-20,Freelance design payment - Studio Kite,15000,INR,income,HDFC Checking,income,txn_1002
+demo_user,2026-06-20,Cafe Coffee Day,-380,INR,Dining out,HDFC Checking,expense,txn_1017
+demo_user,2026-06-22,Uber rides,-1400,INR,Transport / fuel,HDFC Checking,expense,txn_1020
+demo_user,2026-06-24,Myntra order,-2600,INR,Shopping,HDFC Checking,expense,txn_1022
+demo_user,2026-06-25,BigBasket grocery order,-3400,INR,Groceries,HDFC Checking,expense,txn_1014
+demo_user,2026-06-27,Barbeque Nation dinner,-2200,INR,Dining out,HDFC Checking,expense,txn_1018
+demo_user,2026-06-28,Credit card bill payment,-3200,INR,Debt payment,HDFC Checking,expense,txn_1023
+demo_user,2026-07-01,Salary credit - Acme Analytics Pvt Ltd,110000,INR,income,HDFC Checking,income,txn_1024
+demo_user,2026-07-01,Rent payment - landlord NEFT,-32000,INR,Rent,HDFC Checking,expense,txn_1026
+demo_user,2026-07-03,Gold's Gym membership,-1800,INR,Subscriptions,HDFC Checking,expense,txn_1033
+demo_user,2026-07-04,BigBasket grocery order,-3600,INR,Groceries,HDFC Checking,expense,txn_1034
+demo_user,2026-07-05,Health insurance premium - Star Health,-2400,INR,Insurance,HDFC Checking,expense,txn_1027
+demo_user,2026-07-06,Zomato - dinner order,-650,INR,Dining out,HDFC Checking,expense,txn_1038
+demo_user,2026-07-06,Zomato - dinner order,-650,INR,Dining out,HDFC Checking,expense,txn_1047
+demo_user,2026-07-07,Car loan EMI - HDFC Bank,-9500,INR,Debt payment,HDFC Checking,expense,txn_1028
+demo_user,2026-07-08,Indian Oil - fuel,-3000,INR,Transport / fuel,HDFC Checking,expense,txn_1042
+demo_user,2026-07-10,ACT Fibernet - home wifi,-1200,INR,Utilities,HDFC Checking,expense,txn_1029
+demo_user,2026-07-11,BigBasket grocery order,-3600,INR,Groceries,HDFC Checking,expense,txn_1035
+demo_user,2026-07-13,Swiggy - lunch order,-420,INR,Dining out,HDFC Checking,expense,txn_1039
+demo_user,2026-07-14,Netflix subscription,-649,INR,Subscriptions,HDFC Checking,expense,txn_1030
+demo_user,2026-07-15,Amazon.in order,-3200,INR,Shopping,HDFC Checking,expense,txn_1044
+demo_user,2026-07-16,Spotify Premium,-119,INR,Subscriptions,HDFC Checking,expense,txn_1031
+demo_user,2026-07-18,Amazon Prime membership,-179,INR,Subscriptions,HDFC Checking,expense,txn_1032
+demo_user,2026-07-18,BigBasket grocery order,-3600,INR,Groceries,HDFC Checking,expense,txn_1036
+demo_user,2026-07-19,Apple Store - MacBook repair,-18500,INR,Shopping,HDFC Checking,expense,txn_1048
+demo_user,2026-07-20,Freelance design payment - Studio Kite,12000,INR,income,HDFC Checking,income,txn_1025
+demo_user,2026-07-20,Cafe Coffee Day,-380,INR,Dining out,HDFC Checking,expense,txn_1040
+demo_user,2026-07-22,Uber rides,-1400,INR,Transport / fuel,HDFC Checking,expense,txn_1043
+demo_user,2026-07-24,Myntra order,-2600,INR,Shopping,HDFC Checking,expense,txn_1045
+demo_user,2026-07-25,BigBasket grocery order,-3600,INR,Groceries,HDFC Checking,expense,txn_1037
+demo_user,2026-07-27,Barbeque Nation dinner,-2200,INR,Dining out,HDFC Checking,expense,txn_1041
+demo_user,2026-07-28,Credit card bill payment,-3200,INR,Debt payment,HDFC Checking,expense,txn_1046

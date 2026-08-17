@@ -1,0 +1,12 @@
+# Additive to the root requirements.txt (the finmate engine's own
+# dependencies -- openai, langgraph, qdrant-client, sentence-transformers,
+# etc.). Installed together: see backend/Dockerfile, or for local dev:
+#
+#   pip install -r requirements.txt -r backend/requirements.txt
+#
+# Deliberately does NOT include `streamlit` (that's app.py's dependency,
+# not this API's -- no reason to ship it in a backend-only deploy image)
+# even though it's still in the root file for anyone running app.py.
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0

@@ -1,0 +1,26 @@
+name: Keep Streamlit App Awake
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Streamlit health endpoint
+        run: |
+          STATUS=$(curl -sS --max-time 60 --retry 3 --retry-delay 10 \
+            -A "Mozilla/5.0" \
+            -o /dev/null \
+            -w "%{http_code}" \
+            "https://subarna.streamlit.app/_stcore/health")
+
+          echo "Status: $STATUS"
+
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
+            echo "Streamlit health check failed"
+            exit 1
+          fi
