@@ -62,6 +62,22 @@ FRONTEND_ORIGINS = [
 #: than fail a deploy health check.
 WARM_UP_ON_STARTUP = os.environ.get("FINMATE_WARM_UP_ON_STARTUP", "true").strip().lower() not in ("false", "0", "no")
 
+#: Cross-encoder reranking (finmate/rag.py stage 6) is **off by
+#: default** -- read this the same way finmate.rag.retrieve reads it
+#: itself (same env var, same "true"/"1"/"yes" allow-list, same opt-IN
+#: polarity), so this one flag controls both the per-request behavior
+#: and main.py's startup warm-up consistently. Off by default because
+#: it's the one dependency in this whole pipeline heavy enough to OOM a
+#: memory-constrained deployment (a 512MB free-tier container, say) --
+#: loading it at startup on top of the embedder that just finished
+#: loading is exactly the kind of thing that gets a process killed
+#: before it ever serves a request. Retrieval still works fully without
+#: it (metadata filter + keyword + vector search, fused by reciprocal
+#: rank fusion -- see README.md's "RAG retrieval" section); reranking is
+#: an accuracy improvement on top, not a requirement. Set to "true" on
+#: any deployment with memory to spare for the accuracy gain.
+ENABLE_RERANKER = os.environ.get("ENABLE_RERANKER", "").strip().lower() in ("true", "1", "yes")
+
 #: Demo/default user_id, used only as a UI convenience default -- the
 #: same convention app.py's sidebar and scripts/seed_demo_data.py use.
 DEFAULT_USER_ID = os.environ.get("FINMATE_DEFAULT_USER_ID", "demo_user")

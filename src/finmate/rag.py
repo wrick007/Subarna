@@ -185,6 +185,7 @@ def warm_up(
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     cross_encoder_model: str = DEFAULT_CROSS_ENCODER_MODEL,
     qdrant_path: str = DEFAULT_QDRANT_PATH,
+    warm_cross_encoder: Optional[bool] = None,
 ) -> dict[str, bool]:
     """Pre-load every cacheable model/client this module and `reranker`
     use, so the *first real retrieval* doesn't pay the (by far largest --
@@ -200,13 +201,35 @@ def warm_up(
     startup hook; also handy to call once at the top of a long batch job
     for the same reason.
 
+    `warm_cross_encoder` (None = auto from the same `ENABLE_RERANKER` env
+    var `retrieve()` itself checks): whether to load the cross-encoder
+    here at all. This matters on its own, separately from `retrieve()`'s
+    own `ENABLE_RERANKER` check -- an earlier version of this function
+    always loaded it, meaning a deployment that disabled reranking on
+    every *retrieval* call still paid the memory cost of loading the
+    model at *startup* regardless, since this function ran before any
+    request (and hence before `retrieve()`'s own check) ever happened.
+    On a memory-constrained host (a 512MB free-tier container, say) that
+    startup-time load -- on top of the embedder that just finished
+    loading -- is exactly the kind of thing that gets a process killed by
+    an OOM killer before it ever serves a request. Skipping it here when
+    reranking is disabled is what actually fixes that, not just disabling
+    it at query time.
+
     Returns which pieces actually became available, e.g.
     `{"embedder": True, "qdrant_client": True, "cross_encoder": False}`.
+    `cross_encoder` is `False` (not attempted, not unavailable -- this
+    function doesn't distinguish the two in its return value) whenever
+    `warm_cross_encoder` resolves to False.
     """
+    reranker_env = os.environ.get("ENABLE_RERANKER", "")
+    want_cross_encoder = (
+        warm_cross_encoder if warm_cross_encoder is not None else (reranker_env.strip().lower() in ("true", "1", "yes"))
+    )
     return {
         "embedder": _get_embedder(embedding_model) is not None,
         "qdrant_client": _get_qdrant_client(qdrant_path) is not None,
-        "cross_encoder": reranker._get_cross_encoder(cross_encoder_model) is not None,
+        "cross_encoder": want_cross_encoder and reranker._get_cross_encoder(cross_encoder_model) is not None,
     }
 
 
@@ -512,7 +535,7 @@ def retrieve(
     enable_query_rewrite: Optional[bool] = None,
     enable_keyword_search: bool = True,
     enable_vector_search: bool = True,
-    enable_rerank: bool = True,
+    enable_rerank: Optional[bool] = None,
     rerank_pool_size: int = DEFAULT_RERANK_POOL,
     cache: Optional[dict] = None,
 ) -> RetrievalResult:
@@ -532,11 +555,20 @@ def retrieve(
       - `enable_query_rewrite` (None = auto from `FINMATE_RAG_MODE` env
         var / key availability): at most one Groq/Gemini call to expand
         the query for stage 3's benefit.
-      - `enable_keyword_search` / `enable_vector_search` / `enable_rerank`:
-        force a stage off regardless of what's available (useful for
-        tests and for ops -- e.g. disabling rerank to save CPU). Each
-        still auto-degrades to "unavailable" on its own when left on but
-        its dependency is missing.
+      - `enable_rerank` (None = auto from `ENABLE_RERANKER` env var,
+        default **off** if that var is unset or not "true"/"1"/"yes"):
+        the cross-encoder is the one dependency in this whole pipeline
+        heavy enough to matter on a memory-constrained deployment (a
+        512MB free-tier container, say) -- both loading the model itself
+        (`reranker._get_cross_encoder`, and see `warm_up` below) and
+        running it. Off by default so a fresh deployment doesn't have to
+        know to disable it before it OOMs; set `ENABLE_RERANKER=true`
+        wherever you have the memory to spare and want the accuracy gain
+        `tests/test_rag_hybrid.py`'s rerank-integration tests document.
+      - `enable_keyword_search` / `enable_vector_search`: force a stage
+        off regardless of what's available (useful for tests and for
+        ops). Each still auto-degrades to "unavailable" on its own when
+        left on but its dependency is missing.
 
     `llm_client`: inject an existing (or mocked) LLMClient for stage 2.
     If None, `finmate.query_rewrite` constructs one lazily from
@@ -599,7 +631,7 @@ def _retrieve_impl(
     enable_query_rewrite: Optional[bool],
     enable_keyword_search: bool,
     enable_vector_search: bool,
-    enable_rerank: bool,
+    enable_rerank: Optional[bool],
     rerank_pool_size: int,
 ) -> RetrievalResult:
     """The pipeline itself -- see `retrieve`'s docstring for the full
@@ -700,7 +732,14 @@ def _retrieve_impl(
     rerank_pool = fused[:rerank_pool_size]
     rerank_score_map: dict[str, float] = {}
     rerank_used = False
-    if enable_rerank:
+    # Opt-in, unlike want_rewrite above: an unset/unrecognized value
+    # means *disabled*, not enabled -- see retrieve()'s docstring. The
+    # cross-encoder is the one piece of this pipeline that can OOM a
+    # memory-constrained deployment (see warm_up()'s docstring), so the
+    # safe default has to be off, not on.
+    reranker_env = os.environ.get("ENABLE_RERANKER", "")
+    want_rerank = enable_rerank if enable_rerank is not None else (reranker_env.strip().lower() in ("true", "1", "yes"))
+    if want_rerank:
         docs = [
             (hit.source_id, keyword_search.searchable_text(by_id[hit.source_id]))
             for hit in rerank_pool if hit.source_id in by_id

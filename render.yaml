@@ -10,21 +10,22 @@
 # `sync: false` value below (your LLM provider's API key) since Render
 # never stores secrets in a file you might commit to Git.
 #
-# Persistent disk: included below on the Starter plan so
-# data/finmate.db and the optional Qdrant vector index survive restarts
-# and redeploys. Costs ~$7/mo for the service and a small amount for the
-# disk itself (see Render's current pricing page). If you'd rather start
-# free and accept that demo data resets on every redeploy (fine for a
+# Persistent disk: NOT included below, because free-tier services can't
+# have one at all (Render requires Starter or higher for a disk) -- see
+# DEPLOYMENT.md's "Persistence, cost, and what's realistic". That means
+# data/finmate.db and the optional Qdrant vector index live only on the
+# container's local, ephemeral disk: they reset to empty on every
+# restart, redeploy, or free-tier spin-down/spin-up. Fine for a
 # portfolio/demo deployment -- just re-run POST /api/users/seed-demo-data
-# afterward), delete the `disk:` block below and change `plan: starter`
-# to `plan: free`. Free-tier services also spin down after 15 minutes of
-# inactivity, with a ~30-60s cold start on the next request.
+# (or click "Load demo data" in the frontend) afterward. If you want real
+# persistence, switch to the Starter plan (~$7/mo) and uncomment the
+# `disk:` block at the bottom of this file.
 
 services:
   - type: web
     name: finmate-backend
     runtime: docker
-    plan: starter
+    plan: free
     region: oregon
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
@@ -42,7 +43,9 @@ services:
         value: /app/data/qdrant_store
       - key: FINMATE_WARM_UP_ON_STARTUP
         value: "true"
-    disk:
-      name: finmate-data
-      mountPath: /app/data
-      sizeGB: 1
+      - key: ENABLE_RERANKER
+        value: "false" # cross-encoder reranking off -- the one thing heavy enough to OOM a 512MB free instance. See finmate/rag.py's "Performance" docstring. Set "true" once you're on a plan with memory to spare.
+    # disk:                     # uncomment this block (and change `plan: free` above to `plan: starter`)
+    #   name: finmate-data      # for real persistence -- data/finmate.db and the vector index otherwise
+    #   mountPath: /app/data    # reset on every restart/redeploy/spin-down on the free plan (see note above).
+    #   sizeGB: 1

@@ -11,5 +11,3 @@ data/rag_eval_results.json
 *.egg-info/
 .pytest_cache/
 .DS_Store
-node_modules/
-backend/data/qdrant_store/

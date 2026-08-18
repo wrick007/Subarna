@@ -263,6 +263,12 @@ def main() -> None:
                          help="Also exercise stage 2 (<=1 Groq/Gemini call per unique query, via "
                               "FINMATE_LLM_PROVIDER + the matching API key). Off by default so this "
                               "script makes zero LLM calls and needs no key to run.")
+    parser.add_argument("--no-rerank", action="store_true",
+                         help="Skip stage 6 (cross-encoder rerank). On by default here regardless of "
+                              "the ENABLE_RERANKER env var a deployment might set (see finmate/rag.py's "
+                              "docstring) -- this script measures the hybrid pipeline's full capability, "
+                              "not a memory-constrained deployment's runtime default, so it always "
+                              "exercises rerank unless you explicitly ask it not to.")
     parser.add_argument("--top-k", type=int, default=RETRIEVE_DEPTH)
     args = parser.parse_args()
 
@@ -287,7 +293,8 @@ def main() -> None:
     def after_fn(query: str, **filters) -> list[str]:
         result = rag.retrieve(
             user_id=user_id, query=query, top_k=args.top_k, db_path=args.db_path,
-            qdrant_path=args.qdrant_path, enable_query_rewrite=args.with_query_rewrite, **filters,
+            qdrant_path=args.qdrant_path, enable_query_rewrite=args.with_query_rewrite,
+            enable_rerank=not args.no_rerank, **filters,
         )
         return [e.source_id for e in result.evidence]
 
@@ -295,14 +302,18 @@ def main() -> None:
     after_report = evaluate(eval_set, after_fn)
 
     print_report("BEFORE  (pre-upgrade: metadata filter + single-pass vector rerank only)", before_report)
-    after_title = "AFTER   (hybrid: keyword + vector + RRF fusion + cross-encoder rerank"
+    after_title = "AFTER   (hybrid: keyword + vector + RRF fusion"
+    after_title += " + cross-encoder rerank" if not args.no_rerank else ", rerank off"
     after_title += " + query rewrite)" if args.with_query_rewrite else ", query rewrite off)"
     print_report(after_title, after_report)
     print_comparison(before_report, after_report)
 
     out_path = DATA_DIR / "rag_eval_results.json"
     out_path.write_text(json.dumps(
-        {"capabilities": caps, "with_query_rewrite": args.with_query_rewrite, "before": before_report, "after": after_report},
+        {
+            "capabilities": caps, "with_query_rewrite": args.with_query_rewrite,
+            "rerank_enabled": not args.no_rerank, "before": before_report, "after": after_report,
+        },
         indent=2,
     ))
     print(f"Full per-query results written to {out_path}")

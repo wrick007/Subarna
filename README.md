@@ -151,8 +151,22 @@ and adds `keyword_search_used`, `rerank_used`, `query_rewrite_used`, and
 client ever constructed. Every other stage is controlled per-call via
 `retrieve()`'s `enable_keyword_search` / `enable_vector_search` /
 `enable_rerank` / `enable_query_rewrite` parameters (all default to "on,
-auto-degrades if unavailable") — see `finmate/rag.py:retrieve`'s
-docstring.
+auto-degrades if unavailable" — **except `enable_rerank`, which defaults
+to *off***; see below) — see `finmate/rag.py:retrieve`'s docstring.
+
+**`ENABLE_RERANKER=true`** (env var) turns stage 6 (cross-encoder rerank)
+on — it's the one stage that defaults **off**, unlike every other one
+above, because it's the one dependency in this pipeline heavy enough to
+matter on a memory-constrained deployment: loading the cross-encoder model
+on top of the embedder can OOM a small container (Render's free tier,
+512MB, is the concrete case this was fixed for). Retrieval works fully
+without it — metadata filter + keyword + vector search + RRF fusion all
+still run regardless, per the fallback ladder above — rerank is an
+accuracy improvement on top, not a requirement. See
+`tests/test_rag_hybrid.py`'s `test_rerank_turns_on_via_enable_reranker_env_var`
+/ `test_rerank_defaults_off_when_enable_reranker_env_var_is_unset` for what
+this actually guarantees, and DEPLOYMENT.md's "Persistence, cost, and
+what's realistic" for the deployment-sizing tradeoff in full.
 
 ### Performance: speed & token cost
 
@@ -170,6 +184,7 @@ detail lives in each module's docstring; summary:
 | Shared LLM client for query rewrite | `finmate/orchestrator.py` → `finmate/agents/rag_agent.py` | Query rewrite used to construct its own `LLMClient` (a second OpenAI-SDK client, no connection reuse) instead of reusing the one every other agent in the turn already has. |
 | Compact, trimmed prompt JSON | `finmate/agents/_shared.py`, `critic.py`, `synthesis.py`, `cashflow.py` | Evidence sent to every specialist agent, synthesis, and the critic is serialized compactly (not pretty-printed) and trimmed to the fields an LLM actually needs — audit-only fields (`keyword_score`/`vector_score`/`rerank_score`/`retrieval_stage`, and `page`, which this app's transaction evidence never populates) stay on `RetrievalResult`/`EvidenceItem` for the API and UI, just not in the tokens billed to Groq/Gemini. |
 | Skip the constitution for query rewrite | `finmate/llm.py:LLMClient.call(include_constitution=...)` | The ~400-token CONSTITUTION governs how FinMate talks to *the user* and handles *their* data — query rewrite does neither (it only turns their own question into a few search phrasings), so it's the one call site that opts out. |
+| Cross-encoder rerank off by default | `finmate/rag.py:retrieve`, `finmate/rag.py:warm_up`, `backend/app/config.py` | Not a speed/token optimization like the rest of this table — a *memory* one, for deployment. See `ENABLE_RERANKER` above. |
 
 None of this changes the fallback ladder, the ranking algorithm, or the
 LLM provider — it changes how many times a model gets loaded, how many

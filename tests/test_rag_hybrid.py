@@ -215,7 +215,11 @@ def test_rerank_stage_reorders_final_evidence_and_sets_flags(tmp_path, monkeypat
         rag.reranker, "cross_encoder_rerank",
         lambda query, documents, model_name=rag.DEFAULT_CROSS_ENCODER_MODEL: [("b", 9.0), ("a", 1.0)],
     )
-    result = rag.retrieve("u1", query="order", db_path=db_path, enable_query_rewrite=False)
+    # enable_rerank=True explicit: rerank is opt-in (ENABLE_RERANKER env
+    # var, default off -- see retrieve()'s docstring "Performance"), so
+    # this test -- whose whole point is proving rerank took effect --
+    # has to ask for it, unlike before that default flipped.
+    result = rag.retrieve("u1", query="order", db_path=db_path, enable_query_rewrite=False, enable_rerank=True)
     assert result.rerank_used is True
     assert [e.source_id for e in result.evidence] == ["b", "a"]
     assert result.stage == "keyword+rerank (no vector)"
@@ -233,7 +237,11 @@ def test_rerank_unavailable_falls_back_to_fused_order(tmp_path, monkeypatch):
         rag.reranker, "cross_encoder_rerank",
         lambda query, documents, model_name=rag.DEFAULT_CROSS_ENCODER_MODEL: None,
     )
-    result = rag.retrieve("u1", query="zomato", db_path=db_path, enable_query_rewrite=False)
+    # enable_rerank=True explicit: this test verifies the *attempted, but
+    # the model returned None* fallback specifically -- distinct from
+    # "never attempted because disabled," which every other test in this
+    # file now exercises implicitly (by not passing enable_rerank at all).
+    result = rag.retrieve("u1", query="zomato", db_path=db_path, enable_query_rewrite=False, enable_rerank=True)
     assert result.rerank_used is False
     assert result.stage == "keyword only"
     assert [e.source_id for e in result.evidence] == ["a"]
@@ -253,6 +261,47 @@ def test_enable_rerank_false_skips_rerank_even_if_available(tmp_path, monkeypatc
     result = rag.retrieve("u1", query="zomato", db_path=db_path, enable_query_rewrite=False, enable_rerank=False)
     assert result.rerank_used is False
     assert called == []
+
+
+# ---------------------------------------------------------------------------
+# ENABLE_RERANKER env var -- see finmate/rag.py:retrieve's "Performance"
+# docstring section. enable_rerank=None (i.e. not passed at all) is the
+# case every fixture above already covers implicitly; these two tests are
+# the ones that actually flip the env var to prove *that* mechanism works,
+# not just the explicit-True/False parameter tests above.
+# ---------------------------------------------------------------------------
+
+
+def test_rerank_defaults_off_when_enable_reranker_env_var_is_unset(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _seed(db_path, [
+        Transaction(user_id="u1", date="2026-06-01", description="Zomato dinner order",
+                    amount=-1, category="Dining out", source_id="a"),
+    ])
+    monkeypatch.delenv("ENABLE_RERANKER", raising=False)
+    called = []
+    monkeypatch.setattr(
+        rag.reranker, "cross_encoder_rerank",
+        lambda *a, **kw: called.append(1) or [("a", 1.0)],
+    )
+    result = rag.retrieve("u1", query="zomato", db_path=db_path, enable_query_rewrite=False)
+    assert result.rerank_used is False
+    assert called == []  # never even attempted -- not "attempted, unavailable"
+
+
+def test_rerank_turns_on_via_enable_reranker_env_var(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    _seed(db_path, [
+        Transaction(user_id="u1", date="2026-06-01", description="Zomato dinner order",
+                    amount=-1, category="Dining out", source_id="a"),
+    ])
+    monkeypatch.setenv("ENABLE_RERANKER", "true")
+    monkeypatch.setattr(
+        rag.reranker, "cross_encoder_rerank",
+        lambda query, documents, model_name=rag.DEFAULT_CROSS_ENCODER_MODEL: [("a", 1.0)],
+    )
+    result = rag.retrieve("u1", query="zomato", db_path=db_path, enable_query_rewrite=False)
+    assert result.rerank_used is True
 
 
 # ---------------------------------------------------------------------------

@@ -284,30 +284,35 @@ Being direct about tradeoffs rather than just listing steps:
 
 | | Render Free | Render Starter (~$7/mo) |
 |---|---|---|
-| Persistent disk | **Not available** | Yes (`render.yaml` includes a 1GB one) |
-| What that means here | `data/finmate.db` and the vector index reset on every redeploy/restart — fine for a portfolio/demo deployment, re-run "Load demo data" afterward | Your data (and anyone else's, if you add real users) survives restarts |
+| Persistent disk | **Not available at all** — Render requires Starter or higher | Yes (uncomment the `disk:` block in `render.yaml`, and set `plan: starter`) |
+| What that means here | `data/finmate.db` and the vector index (if built) live only on the container's local, ephemeral disk — they reset on every redeploy, restart, or free-tier spin-down/spin-up. There is currently **no durable hosting for the database** on the free plan; it isn't "somewhere else," it's just a file inside the container that gets wiped. Fine for a portfolio/demo deployment — re-run "Load demo data" (or `POST /api/users/seed-demo-data`) afterward | Your data (and anyone else's, if you add real users) survives restarts |
 | Spin-down | After ~15 min idle; next request pays a ~30-60s cold start | Always on |
 | Memory | 512MB | 512MB on the base Starter instance — see note below |
 
-**Memory is the thing actually worth being careful about**, independent of
-which plan you pick: this backend loads `sentence-transformers` (an
-embedding model) and a cross-encoder reranker into memory (see
-`finmate/rag.py`'s "Performance" section in README.md — that's exactly what
-`warm_up` pre-loads at startup). Both are small models chosen specifically
-to be practical on CPU, but 512MB is genuinely tight once you add FastAPI,
-the Python interpreter itself, and Qdrant's embedded index on top. If you
-see out-of-memory restarts in Render's logs, the fix is a bigger instance
-type, not a code change.
+**Memory: `render.yaml` defaults to `ENABLE_RERANKER=false` specifically
+because of this.** Cross-encoder reranking (`finmate/rag.py` stage 6) is
+the one piece of this pipeline heavy enough to matter on a 512MB
+container: the embedder alone loads fine, but loading the cross-encoder
+*on top of it* at startup is what actually gets the process OOM-killed on
+Render free — the exact failure mode this default now avoids. Retrieval
+still works fully with reranking off: metadata filter + keyword search +
+vector search + RRF fusion all still run, per the fallback ladder in
+README.md's "RAG retrieval" section — you lose the cross-encoder's extra
+accuracy pass specifically, not retrieval itself. If you move to a plan
+with memory to spare and want that accuracy back, set `ENABLE_RERANKER=true`
+(README.md's "RAG retrieval" section documents exactly what turning it on
+guarantees).
 
-**Vector search is optional, not required** — if `sentence-transformers`
-can't load (memory pressure, or any other reason), retrieval automatically
-falls back to metadata-filtering + keyword search, per the fallback ladder
-documented in README.md's "RAG retrieval" section. Chat still works; you
-lose semantic ("similar meaning, different words") matching specifically.
+**Vector search is separately optional too** — if `sentence-transformers`
+still can't load even with reranking off (unlikely at 512MB with just the
+embedder, but possible under other memory pressure), retrieval
+automatically falls back to metadata-filtering + keyword search. Chat
+still works; you lose semantic ("similar meaning, different words")
+matching specifically.
 
 None of this is a reason to avoid Render's free tier for trying things
-out — it's a reason to know what you're trading for $0, so a cold start or
-a reset dataset doesn't look like a bug.
+out — it's a reason to know what you're trading for $0, so a cold start,
+a reset dataset, or reranking being off doesn't look like a bug.
 
 ---
 
@@ -339,6 +344,20 @@ Free-tier cold start (~30-60s) or, on any plan, the very first request
 after a fresh deploy while `warm_up` finishes loading models — both
 expected, see `finmate/rag.py:warm_up`'s docstring and this file's
 persistence table above.
+
+**Backend gets killed / restarts during startup on Render Free ("Out of
+memory")**
+This was the cross-encoder reranker loading on top of the embedder at
+startup and exceeding the free tier's 512MB — `render.yaml` now sets
+`ENABLE_RERANKER=false` by default specifically to avoid it (see
+"Persistence, cost, and what's realistic" above). If you're seeing this
+on a repo checked out before that default existed, add
+`ENABLE_RERANKER=false` (or just remove any `ENABLE_RERANKER=true` you
+set) to the service's environment variables on Render and redeploy. If
+it's *still* OOMing with reranking off, that means even the embedder
+alone plus FastAPI plus Qdrant's embedded index doesn't fit in 512MB in
+your case — at that point the fix genuinely is a bigger instance type,
+not a further code change.
 
 **Render build fails or times out**
 `torch`/`sentence-transformers` make this a heavier build than a typical
