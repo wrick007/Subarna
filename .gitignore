@@ -11,3 +11,4 @@ data/rag_eval_results.json
 *.egg-info/
 .pytest_cache/
 .DS_Store
+DEPLOYMENT.md
