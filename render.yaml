@@ -35,6 +35,12 @@ services:
         value: groq
       - key: GROQ_API_KEY
         sync: false # you'll be prompted for this in the Render dashboard
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: FINMATE_FRONTEND_ORIGINS
         value: https://your-frontend.vercel.app # update after your Vercel deploy -- see DEPLOYMENT.md
       - key: FINMATE_DB_PATH
