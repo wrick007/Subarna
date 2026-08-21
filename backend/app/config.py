@@ -81,3 +81,7 @@ ENABLE_RERANKER = os.environ.get("ENABLE_RERANKER", "").strip().lower() in ("tru
 #: Demo/default user_id, used only as a UI convenience default -- the
 #: same convention app.py's sidebar and scripts/seed_demo_data.py use.
 DEFAULT_USER_ID = os.environ.get("FINMATE_DEFAULT_USER_ID", "demo_user")
+
+# Supabase is optional locally, but mandatory for a deployed authenticated app.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")

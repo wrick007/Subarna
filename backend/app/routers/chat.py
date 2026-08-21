@@ -29,13 +29,15 @@ import json
 import time
 from typing import Iterator
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from .. import config
+from ..auth import CurrentUser, require_current_user
 from ..api_schemas import CalculationOut, ChatRequest, ChatResponse, EvidenceItemOut, RetrievalOut
 from ..deps import get_llm_client
 
+from finmate import db  # noqa: E402
 from finmate.casual import is_casual_message, pick_casual_response  # noqa: E402
 from finmate.orchestrator import FinMateResult, run_finmate, run_finmate_stream  # noqa: E402
 
@@ -98,8 +100,11 @@ def _build_chat_response(result: FinMateResult, latency_ms: int) -> ChatResponse
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, request: Request) -> ChatResponse:
+def chat(payload: ChatRequest, request: Request, current_user: CurrentUser = Depends(require_current_user)) -> ChatResponse:
     started = time.monotonic()
+    user_id = current_user.user_id or payload.user_id
+    if not user_id:
+        raise ValueError("A user ID is required in local development.")
 
     # Checked *before* requiring an LLM client, not after: this is the
     # one path that is genuinely allowed to need zero LLM calls (see
@@ -111,9 +116,12 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     # endpoint did, via a FastAPI `Depends` that runs unconditionally
     # before the route body) would silently break that property.
     if is_casual_message(payload.message):
-        return ChatResponse(
+        response = ChatResponse(
             response=pick_casual_response(), is_casual=True, latency_ms=int((time.monotonic() - started) * 1000),
         )
+        db.append_chat_message(user_id, "user", payload.message, config.DB_PATH)
+        db.append_chat_message(user_id, "assistant", response.response, config.DB_PATH)
+        return response
 
     llm_client = get_llm_client(request)
     # Wire shape (ChatMessageIn) -> orchestrator shape (plain dict): see
@@ -122,10 +130,13 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     # the API boundary.
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     result = run_finmate(
-        payload.user_id, payload.message, llm_client, db_path=config.DB_PATH, conversation_history=history,
+        user_id, payload.message, llm_client, db_path=config.DB_PATH, conversation_history=history,
     )
     latency_ms = int((time.monotonic() - started) * 1000)
-    return _build_chat_response(result, latency_ms)
+    response = _build_chat_response(result, latency_ms)
+    db.append_chat_message(user_id, "user", payload.message, config.DB_PATH)
+    db.append_chat_message(user_id, "assistant", response.response, config.DB_PATH)
+    return response
 
 
 def _sse(event: str, data: dict) -> str:
@@ -136,10 +147,10 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _event_stream(payload: ChatRequest, llm_client, history: list[dict]) -> Iterator[str]:
+def _event_stream(payload: ChatRequest, user_id: str, llm_client, history: list[dict]) -> Iterator[str]:
     started = time.monotonic()
     for event in run_finmate_stream(
-        payload.user_id, payload.message, llm_client, db_path=config.DB_PATH, conversation_history=history,
+        user_id, payload.message, llm_client, db_path=config.DB_PATH, conversation_history=history,
     ):
         if event.type == "token":
             yield _sse("token", {"text": event.text})
@@ -155,11 +166,13 @@ def _event_stream(payload: ChatRequest, llm_client, history: list[dict]) -> Iter
         else:  # "done"
             latency_ms = int((time.monotonic() - started) * 1000)
             body = _build_chat_response(event.result, latency_ms)
+            db.append_chat_message(user_id, "user", payload.message, config.DB_PATH)
+            db.append_chat_message(user_id, "assistant", body.response, config.DB_PATH)
             yield _sse("done", body.model_dump())
 
 
 @router.post("/chat/stream")
-def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
+def chat_stream(payload: ChatRequest, request: Request, current_user: CurrentUser = Depends(require_current_user)) -> StreamingResponse:
     """SSE counterpart of `chat` -- see `finmate.orchestrator.
     run_finmate_stream` and `StreamEvent` for the pipeline-level design,
     and `_event_stream`/`_sse` above for the wire format each event type
@@ -175,6 +188,9 @@ def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
     message will turn out to be casual.
     """
     started = time.monotonic()
+    user_id = current_user.user_id or payload.user_id
+    if not user_id:
+        raise ValueError("A user ID is required in local development.")
 
     if is_casual_message(payload.message):
 
@@ -183,10 +199,12 @@ def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
             yield _sse("token", {"text": text})
             latency_ms = int((time.monotonic() - started) * 1000)
             body = ChatResponse(response=text, is_casual=True, latency_ms=latency_ms)
+            db.append_chat_message(user_id, "user", payload.message, config.DB_PATH)
+            db.append_chat_message(user_id, "assistant", text, config.DB_PATH)
             yield _sse("done", body.model_dump())
 
         return StreamingResponse(_casual_stream(), media_type="text/event-stream")
 
     llm_client = get_llm_client(request)
     history = [{"role": h.role, "content": h.content} for h in payload.history]
-    return StreamingResponse(_event_stream(payload, llm_client, history), media_type="text/event-stream")
+    return StreamingResponse(_event_stream(payload, user_id, llm_client, history), media_type="text/event-stream")

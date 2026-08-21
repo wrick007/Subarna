@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import sys
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from .. import config
+from ..auth import CurrentUser, require_current_user
 from ..api_schemas import (
     DeleteUserResponse,
     ProfileResponse,
     SeedDemoResponse,
+    SavedChatHistoryResponse,
     TransactionOut,
     TransactionsResponse,
 )
@@ -30,8 +32,18 @@ from finmate import db, rag  # noqa: E402
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+def _authorise_user(requested_user_id: str, current_user: CurrentUser) -> str:
+    """Use the verified identity in production; preserve local dev ergonomics."""
+    if current_user.user_id is None:
+        return requested_user_id
+    if requested_user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You cannot access another user's data.")
+    return current_user.user_id
+
+
 @router.get("/{user_id}/profile", response_model=ProfileResponse)
-def get_profile(user_id: str) -> ProfileResponse:
+def get_profile(user_id: str, current_user: CurrentUser = Depends(require_current_user)) -> ProfileResponse:
+    user_id = _authorise_user(user_id, current_user)
     profile = db.get_user_profile(user_id, db_path=config.DB_PATH)
     if profile is None:
         return ProfileResponse(user_id=user_id, has_profile=False, profile=None)
@@ -46,12 +58,14 @@ def get_transactions(
     category: str | None = None,
     account: str | None = None,
     limit: int = 200,
+    current_user: CurrentUser = Depends(require_current_user),
 ) -> TransactionsResponse:
     """Powers the frontend's spending-snapshot sidebar chart. Filters
     mirror `finmate.rag.retrieve`'s own metadata filter exactly (same
     underlying `db.search_transactions` call) so "what the chart shows"
     and "what the chat evidence panel drew from" can use identical query
     parameters when a caller wants that."""
+    user_id = _authorise_user(user_id, current_user)
     limit = max(1, min(limit, 1000))
     txs = db.search_transactions(
         user_id, start_date=start_date, end_date=end_date, category=category, account=account, db_path=config.DB_PATH,
@@ -72,7 +86,7 @@ def get_transactions(
 
 
 @router.delete("/{user_id}", response_model=DeleteUserResponse)
-def delete_user(user_id: str) -> DeleteUserResponse:
+def delete_user(user_id: str, current_user: CurrentUser = Depends(require_current_user)) -> DeleteUserResponse:
     """"Forget this user's data": removes both the SQLite rows
     (`db.delete_user_data`, same call app.py's Streamlit sidebar button
     makes) and, if one was ever built, this user's Chroma vector
@@ -80,9 +94,18 @@ def delete_user(user_id: str) -> DeleteUserResponse:
     former and leaving the latter behind would be an incomplete "forget
     my data" in anything but name.
     """
+    user_id = _authorise_user(user_id, current_user)
     db.delete_user_data(user_id, db_path=config.DB_PATH)
     rag.delete_user_vector_index(user_id, chroma_path=config.CHROMA_PATH)
     return DeleteUserResponse(user_id=user_id, deleted=True)
+
+
+@router.get("/{user_id}/messages", response_model=SavedChatHistoryResponse)
+def get_saved_messages(
+    user_id: str, limit: int = 100, current_user: CurrentUser = Depends(require_current_user)
+) -> SavedChatHistoryResponse:
+    user_id = _authorise_user(user_id, current_user)
+    return SavedChatHistoryResponse(messages=db.get_chat_messages(user_id, limit=limit, db_path=config.DB_PATH))
 
 
 @router.post("/seed-demo-data", response_model=SeedDemoResponse)

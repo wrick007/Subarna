@@ -32,7 +32,9 @@ class ChatMessageIn(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_id: str = Field(..., min_length=1, max_length=200)
+    # Deprecated compatibility field. When Supabase is configured, the server
+    # ignores it and uses the verified user ID from the bearer token instead.
+    user_id: str = Field("", max_length=200)
     message: str = Field(..., min_length=1, max_length=4000)
     # Short-term conversational memory (see finmate/orchestrator.py's
     # module docstring "Conversation history" -- distinct from the
@@ -143,6 +145,16 @@ class TransactionsResponse(BaseModel):
 class DeleteUserResponse(BaseModel):
     user_id: str
     deleted: bool = True
+
+
+class SavedChatMessageOut(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: str
+
+
+class SavedChatHistoryResponse(BaseModel):
+    messages: list[SavedChatMessageOut] = Field(default_factory=list)
 
 
 class SeedDemoResponse(BaseModel):
