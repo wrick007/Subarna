@@ -61,7 +61,7 @@ RATE_LIMIT_BACKOFF_BASE_SECONDS = 2.0
 PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile",
+        "default_model": "openai/gpt-oss-120b",
         "api_key_env": "GROQ_API_KEY",
     },
     "gemini": {
