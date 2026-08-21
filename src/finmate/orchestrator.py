@@ -178,6 +178,8 @@ from .agents.goal import run_goal_agent
 from .agents.investment import run_investment_agent
 from .agents.memory import (
     apply_memory_action,
+    detect_explicit_profile_update,
+    normalise_memory_action,
     run_memory_agent,
 )
 from .agents.rag_agent import run_retrieval
@@ -460,10 +462,21 @@ def _node_router(
     llm_client: LLMClient,
 ) -> GraphState:
 
-    router_output = run_router(
-        llm_client,
-        state["user_message"],
-        conversation_history=_render_history_block(state.get("conversation_history", [])),
+    # Short, explicit profile facts are both common and safe to recognise
+    # locally. This covers everyday shorthand/typos such as "incone 80k"
+    # and "update EMI to 30k" without sending the user through an avoidable
+    # RAG route or relying on a model to spell the schema field exactly.
+    quick_update = detect_explicit_profile_update(
+        state["user_message"], UserProfile(user_id=state["user_id"])
+    )
+    router_output = (
+        RouterOutput(intent="profile_update")
+        if quick_update
+        else run_router(
+            llm_client,
+            state["user_message"],
+            conversation_history=_render_history_block(state.get("conversation_history", [])),
+        )
     )
 
     if router_output.intent not in ROUTING_TABLE:
@@ -561,11 +574,11 @@ def _node_pipeline(
         # Never repeat a profile update during critic retries.
         if not state.get("memory_applied"):
 
-            memory_action = run_memory_agent(
-                llm_client,
-                state["user_message"],
-                profile,
+            memory_action = (
+                detect_explicit_profile_update(state["user_message"], profile)
+                or run_memory_agent(llm_client, state["user_message"], profile)
             )
+            memory_action = normalise_memory_action(profile, memory_action)
 
             # -------------------------------------------------------
             # Valid explicit update
@@ -588,16 +601,17 @@ def _node_pipeline(
                     db_path=db_path,
                 )
 
-                field_name = (
-                    memory_action.field
-                    .replace("_", " ")
-                )
-
-                response = (
-                    f"Got it. I've updated your "
-                    f"{field_name} to "
-                    f"{memory_action.new_value}."
-                )
+                if memory_action.field == "monthly_income":
+                    response = f"Done — I’ve updated your monthly income to ₹{memory_action.new_value:,.0f}."
+                elif memory_action.field == "fixed_expenses":
+                    emi = next(item for item in profile.fixed_expenses if item.name.casefold() == "emi")
+                    response = f"Done — I’ve updated your monthly EMI to ₹{emi.amount:,.0f}."
+                elif memory_action.field == "variable_expenses":
+                    expenses = next(item for item in profile.variable_expenses if item.name.casefold() == "monthly expenses")
+                    response = f"Done — I’ve updated your monthly expenses to ₹{expenses.typical_monthly_amount:,.0f}."
+                else:
+                    field_name = memory_action.field.replace("_", " ")
+                    response = f"Done — I’ve updated your {field_name}."
 
                 return {
                     **state,
@@ -684,6 +698,7 @@ def _node_pipeline(
             state["user_message"],
             profile,
         )
+        memory_action = normalise_memory_action(profile, memory_action)
 
         if (
             memory_action.memory_action != "none"

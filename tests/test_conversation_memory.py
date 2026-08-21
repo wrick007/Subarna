@@ -121,7 +121,7 @@ def test_profile_update_fast_path_ignores_history_and_stays_untouched(tmp_path):
     result = run_finmate(
         "u1", "my income is 50000 INR monthly", client, db_path=db_path, conversation_history=history,
     )
-    assert "50000" in result.final_response
+    assert "₹50,000" in result.final_response
     # Fast path never reaches synthesis/critic/formatter at all.
     assert client.calls_with(response_model=None, system_prompt_contains="Senior Personal Financial Analyst") == []
     profile = db.get_user_profile("u1", db_path=db_path)
