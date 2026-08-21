@@ -5,8 +5,10 @@ import type {
   HealthResponse,
   ProfileResponse,
   SeedDemoResponse,
+  SavedChatHistoryResponse,
   TransactionsResponse,
 } from "./types";
+import { getAccessToken } from "./supabase";
 
 /**
  * Backend base URL. Set NEXT_PUBLIC_API_URL in the Vercel project (or
@@ -31,9 +33,10 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
+    const token = await getAccessToken();
     res = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
     });
   } catch {
     // A network-level failure (backend unreachable, CORS rejection, DNS,
@@ -91,9 +94,10 @@ async function chatStream(
 ): Promise<void> {
   let res: Response;
   try {
+    const token = await getAccessToken();
     res = await fetch(`${API_BASE_URL}/api/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ user_id: userId, message, history }),
     });
   } catch {
@@ -175,6 +179,9 @@ export const api = {
     request<TransactionsResponse>(
       `/api/users/${encodeURIComponent(userId)}/transactions?limit=${limit}`,
     ),
+
+  getSavedMessages: (userId: string) =>
+    request<SavedChatHistoryResponse>(`/api/users/${encodeURIComponent(userId)}/messages`),
 
   deleteUser: (userId: string) =>
     request<DeleteUserResponse>(`/api/users/${encodeURIComponent(userId)}`, {

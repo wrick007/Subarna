@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Settings, Wifi, WifiOff } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { getSupabaseClient } from "@/lib/supabase";
 import { generateId } from "@/lib/format";
 import type { ChatHistoryTurn, ChatMessage, HealthResponse, Transaction } from "@/lib/types";
 
@@ -12,8 +13,6 @@ import Composer from "./Composer";
 import MessageList from "./MessageList";
 import StatusBanner from "./StatusBanner";
 
-const USER_ID_STORAGE_KEY = "finmate:user_id";
-const DEFAULT_USER_ID = "demo_user";
 
 // Short-term conversational memory (see finmate/orchestrator.py's module
 // docstring "Conversation history"): how many of the most recent
@@ -36,13 +35,12 @@ function historyForApi(messages: ChatMessage[]): ChatHistoryTurn[] {
     .map((m) => ({ role: m.role, content: m.content }));
 }
 
-export default function ChatShell() {
+export default function ChatShell({ userId, email }: { userId: string; email: string }) {
   // Not persisted via localStorage inside artifacts (that API isn't
   // available there), but this is a real deployed Next.js app, not an
   // artifact preview -- browser storage works normally here, and doing
   // this keeps "which user am I" across a page refresh, which people
   // reasonably expect from a chat app.
-  const [userId, setUserId] = useState(DEFAULT_USER_ID);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -51,17 +49,6 @@ export default function ChatShell() {
   const [isSeedingDemo, setIsSeedingDemo] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-
-  useEffect(() => {
-    // A lazy useState(() => ...) initializer would avoid this effect
-    // (and the resulting extra render) entirely, but can't be used here:
-    // it would run during server rendering too, where `window` doesn't
-    // exist yet -- this has to be an effect specifically because effects
-    // never run on the server, only after the client has hydrated.
-    const stored = window.localStorage.getItem(USER_ID_STORAGE_KEY);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- see comment above
-    if (stored) setUserId(stored);
-  }, []);
 
   // Both effects below follow React's documented pattern for effects
   // that fetch data (react.dev/learn/synchronizing-with-effects#fetching-data):
@@ -100,7 +87,6 @@ export default function ChatShell() {
 
   useEffect(() => {
     let ignore = false;
-    window.localStorage.setItem(USER_ID_STORAGE_KEY, userId);
     // Deliberately synchronous, not inside the .then() below: clearing
     // the previous user's messages must happen immediately when `userId`
     // changes, not after their transactions finish loading -- otherwise
@@ -115,6 +101,16 @@ export default function ChatShell() {
       })
       .catch(() => {
         if (!ignore) setTransactions([]);
+      });
+    api
+      .getSavedMessages(userId)
+      .then((res) => {
+        if (!ignore) setMessages(res.messages.map((m) => ({
+          id: generateId(), role: m.role, content: m.content, createdAt: new Date(m.created_at).getTime(),
+        })));
+      })
+      .catch(() => {
+        if (!ignore) setMessages([]);
       });
     return () => {
       ignore = true;
@@ -189,8 +185,7 @@ export default function ChatShell() {
     setIsSeedingDemo(true);
     try {
       const res = await api.seedDemoData();
-      if (res.user_id !== userId) setUserId(res.user_id);
-      else await refreshTransactions(userId);
+      await refreshTransactions(userId);
     } catch {
       // Surfaced implicitly: the sidebar's transaction snapshot simply
       // won't update, and the person can just try the button again --
@@ -200,6 +195,10 @@ export default function ChatShell() {
       setIsSeedingDemo(false);
     }
   }, [userId, refreshTransactions]);
+
+  const handleSignOut = useCallback(async () => {
+    await getSupabaseClient().auth.signOut();
+  }, []);
 
   const handleForgetData = useCallback(async () => {
     setIsDeleting(true);
@@ -247,12 +246,13 @@ export default function ChatShell() {
           open={accountMenuOpen}
           onClose={() => setAccountMenuOpen(false)}
           userId={userId}
-          onUserIdChange={setUserId}
+          email={email}
           transactions={transactions}
           onLoadDemoData={handleLoadDemoData}
           onForgetData={handleForgetData}
           isSeedingDemo={isSeedingDemo}
           isDeleting={isDeleting}
+          onSignOut={handleSignOut}
         />
       </header>
 

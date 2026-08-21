@@ -104,6 +104,16 @@ export interface DeleteUserResponse {
   deleted: boolean;
 }
 
+export interface SavedChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface SavedChatHistoryResponse {
+  messages: SavedChatMessage[];
+}
+
 export interface SeedDemoResponse {
   user_id: string;
   transactions_seeded: number;

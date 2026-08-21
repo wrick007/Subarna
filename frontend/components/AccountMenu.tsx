@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Database, Loader2, Trash2 } from "lucide-react";
+import { Database, Loader2, LogOut, Trash2 } from "lucide-react";
 
 import type { Transaction } from "@/lib/types";
 
@@ -24,22 +24,24 @@ export default function AccountMenu({
   open,
   onClose,
   userId,
-  onUserIdChange,
+  email,
   transactions,
   onLoadDemoData,
   onForgetData,
   isSeedingDemo,
   isDeleting,
+  onSignOut,
 }: {
   open: boolean;
   onClose: () => void;
   userId: string;
-  onUserIdChange: (id: string) => void;
+  email: string;
   transactions: Transaction[];
   onLoadDemoData: () => void;
   onForgetData: () => void;
   isSeedingDemo: boolean;
   isDeleting: boolean;
+  onSignOut: () => void;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const confirmTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,12 +68,6 @@ export default function AccountMenu({
 
   if (!open) return null;
 
-  function handleUserIdBlur(e: React.FocusEvent<HTMLInputElement>) {
-    const trimmed = e.target.value.trim();
-    if (trimmed && trimmed !== userId) onUserIdChange(trimmed);
-    else e.target.value = userId;
-  }
-
   function handleDeleteClick() {
     if (!confirmingDelete) {
       setConfirmingDelete(true);
@@ -95,20 +91,10 @@ export default function AccountMenu({
         className="absolute right-0 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] space-y-4 rounded-xl border border-border bg-surface p-4 text-left shadow-lg"
       >
         <div>
-          <label htmlFor="user-id" className="text-[11px] font-medium uppercase tracking-wide text-mist">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-mist">
             Signed in as
-          </label>
-          <input
-            id="user-id"
-            key={userId}
-            defaultValue={userId}
-            onBlur={handleUserIdBlur}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-            className="mt-1 w-full rounded-lg border border-border bg-paper px-3 py-1.5 text-sm text-ink focus:border-gold/50 focus:outline-none"
-            placeholder="user_id"
-          />
+          </p>
+          <p className="mt-1 truncate text-sm text-ink">{email || userId}</p>
         </div>
 
         <div>
@@ -142,6 +128,9 @@ export default function AccountMenu({
           >
             {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
             {confirmingDelete ? "Click again to confirm" : "Forget my data"}
+          </button>
+          <button type="button" onClick={onSignOut} className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-soft hover:text-ink">
+            <LogOut className="h-4 w-4" aria-hidden="true" /> Sign out
           </button>
         </div>
       </div>
