@@ -10,17 +10,50 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Ping Streamlit health endpoint
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright
         run: |
-          STATUS=$(curl -sS --max-time 60 --retry 3 --retry-delay 10 \
-            -A "Mozilla/5.0" \
-            -o /dev/null \
-            -w "%{http_code}" \
-            "https://subarna.streamlit.app/_stcore/health")
+          pip install playwright
+          playwright install chromium
 
-          echo "Status: $STATUS"
+      - name: Open Streamlit app in real browser
+        run: |
+          python - << 'PY'
+          from playwright.sync_api import sync_playwright
+          import time
 
-          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
-            echo "Streamlit health check failed"
-            exit 1
-          fi
+          url = "https://subarna.streamlit.app/"
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page()
+              print("Opening:", url)
+
+              page.goto(url, wait_until="networkidle", timeout=120000)
+              time.sleep(20)
+
+              title = page.title()
+              body_text = page.locator("body").inner_text(timeout=30000)
+
+              print("Page title:", title)
+              print("Body preview:")
+              print(body_text[:500])
+
+              page.screenshot(path="streamlit-check.png", full_page=True)
+              browser.close()
+
+              if "This app has gone to sleep" in body_text:
+                  raise Exception("Streamlit app is still sleeping")
+
+              print("Streamlit app opened successfully")
+          PY
+
+      - name: Upload screenshot proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamlit-check-screenshot
+          path: streamlit-check.png
