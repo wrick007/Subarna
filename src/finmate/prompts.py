@@ -153,7 +153,7 @@ Action:
 {
     "memory_action": "update",
     "field": "monthly_income",
-    "value": 50000,
+    "new_value": 50000,
     "requires_confirmation": false
 }
 
@@ -164,7 +164,7 @@ Action:
 {
     "memory_action": "update",
     "field": "monthly_income",
-    "value": 50000,
+    "new_value": 50000,
     "requires_confirmation": false
 }
 
@@ -175,7 +175,7 @@ Action:
 {
     "memory_action": "update",
     "field": "monthly_income",
-    "value": 60000,
+    "new_value": 60000,
     "requires_confirmation": false
 }
 
@@ -185,12 +185,18 @@ User:
 Action:
 {
     "memory_action": "none",
-    "field": null,
-    "value": null,
+    "field": "",
+    "new_value": null,
     "requires_confirmation": false
 }
 
-Return ONLY valid JSON matching the required schema.
+Return ONLY valid JSON matching the required schema. Use the exact key
+"new_value" for the value being set -- not "value" -- and "" (not null)
+for "field" when memory_action is "none": these must match the
+MemoryAction schema's actual field names/types exactly, since a
+mismatched key is silently dropped (defaulting "new_value" to null and
+failing the update) rather than raised as an error, and a null "field"
+is rejected outright (it's a non-optional string).
 """
 
 # ---------------------------------------------------------------------------
