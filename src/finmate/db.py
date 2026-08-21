@@ -19,6 +19,7 @@ SQLite file.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -28,6 +29,26 @@ from typing import Iterator, Optional
 from .schemas import Account, FinancialGoal, FixedExpense, Transaction, UserProfile
 
 DEFAULT_DB_PATH = "data/finmate.db"
+
+
+def _supabase_client():
+    """Return the server-only Supabase client when persistence is configured.
+
+    SQLite remains the zero-configuration local/test backend. Production uses
+    Supabase only when both server credentials are present, so an accidentally
+    missing deployment secret cannot silently fall back to temporary storage.
+    """
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url and not key:
+        return None
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must both be configured.")
+    try:
+        from supabase import create_client
+    except ImportError as exc:  # pragma: no cover - deployment dependency guard
+        raise RuntimeError("Supabase persistence is configured but the supabase package is unavailable.") from exc
+    return create_client(url, key)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (
@@ -56,6 +77,9 @@ CREATE INDEX IF NOT EXISTS idx_tx_user_category ON transactions(user_id, categor
 
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     """Create the database file and tables if they don't already exist."""
+    if _supabase_client() is not None:
+        # Tables are created from supabase/migrations, not at runtime.
+        return
     path = Path(db_path)
     if path.parent and str(path.parent) not in ("", "."):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +106,12 @@ def _connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
 def upsert_profile(profile: UserProfile, db_path: str = DEFAULT_DB_PATH) -> UserProfile:
     """Insert or fully replace a user's profile. Stamps `profile_last_updated`."""
     profile.profile_last_updated = datetime.now(timezone.utc).isoformat()
+    client = _supabase_client()
+    if client is not None:
+        client.table("profiles").upsert(
+            {"user_id": profile.user_id, "profile": profile.model_dump(), "updated_at": profile.profile_last_updated}
+        ).execute()
+        return profile
     with _connect(db_path) as conn:
         conn.execute(
             """INSERT INTO profiles (user_id, profile_json, updated_at)
@@ -97,6 +127,10 @@ def upsert_profile(profile: UserProfile, db_path: str = DEFAULT_DB_PATH) -> User
 
 def get_user_profile(user_id: str, db_path: str = DEFAULT_DB_PATH) -> Optional[UserProfile]:
     """Contract: get_user_profile(user_id). Returns None if the user has no stored profile."""
+    client = _supabase_client()
+    if client is not None:
+        rows = client.table("profiles").select("profile").eq("user_id", user_id).limit(1).execute().data
+        return UserProfile.model_validate(rows[0]["profile"]) if rows else None
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
@@ -126,6 +160,14 @@ def update_memory_field(
 def delete_user_data(user_id: str, db_path: str = DEFAULT_DB_PATH) -> None:
     """Implements the sidebar 'forget this user's data' control: wipes the
     profile row and every transaction row for this user. Irreversible."""
+    client = _supabase_client()
+    if client is not None:
+        # Delete dependent records explicitly; the auth account itself is
+        # intentionally retained so a user can start over after "Forget".
+        client.table("chat_messages").delete().eq("user_id", user_id).execute()
+        client.table("transactions").delete().eq("user_id", user_id).execute()
+        client.table("profiles").delete().eq("user_id", user_id).execute()
+        return
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM profiles WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
@@ -156,6 +198,15 @@ def get_goals(user_id: str, db_path: str = DEFAULT_DB_PATH) -> list[FinancialGoa
 
 
 def insert_transaction(tx: Transaction, db_path: str = DEFAULT_DB_PATH) -> Transaction:
+    client = _supabase_client()
+    if client is not None:
+        row = client.table("transactions").insert({
+            "user_id": tx.user_id, "date": tx.date, "description": tx.description,
+            "amount": tx.amount, "currency": tx.currency, "category": tx.category,
+            "account": tx.account, "type": tx.type, "source_id": tx.source_id,
+        }).execute().data[0]
+        tx.id = row["id"]
+        return tx
     with _connect(db_path) as conn:
         cur = conn.execute(
             """INSERT INTO transactions
@@ -173,6 +224,16 @@ def insert_transaction(tx: Transaction, db_path: str = DEFAULT_DB_PATH) -> Trans
 
 def insert_transactions(txs: list[Transaction], db_path: str = DEFAULT_DB_PATH) -> int:
     """Bulk insert; returns the number of rows inserted."""
+    client = _supabase_client()
+    if client is not None:
+        if txs:
+            client.table("transactions").insert([
+                {"user_id": t.user_id, "date": t.date, "description": t.description, "amount": t.amount,
+                 "currency": t.currency, "category": t.category, "account": t.account,
+                 "type": t.type, "source_id": t.source_id}
+                for t in txs
+            ]).execute()
+        return len(txs)
     with _connect(db_path) as conn:
         conn.executemany(
             """INSERT INTO transactions
@@ -201,6 +262,20 @@ def search_transactions(
     This is the metadata-filter half of hybrid retrieval used by
     `finmate/rag.py` before any vector search happens.
     """
+    client = _supabase_client()
+    if client is not None:
+        query = client.table("transactions").select("*").eq("user_id", user_id)
+        if start_date:
+            query = query.gte("date", start_date)
+        if end_date:
+            query = query.lte("date", end_date)
+        if category:
+            query = query.eq("category", category)
+        if account:
+            query = query.eq("account", account)
+        rows = query.order("date").execute().data
+        return [Transaction(**row) for row in rows]
+
     query = "SELECT * FROM transactions WHERE user_id = ?"
     params: list[object] = [user_id]
     if start_date:
@@ -227,3 +302,21 @@ def search_transactions(
         )
         for r in rows
     ]
+
+
+def append_chat_message(user_id: str, role: str, content: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    """Persist a settled chat turn when Supabase storage is configured."""
+    client = _supabase_client()
+    if client is not None:
+        client.table("chat_messages").insert({"user_id": user_id, "role": role, "content": content}).execute()
+
+
+def get_chat_messages(user_id: str, limit: int = 100, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, str]]:
+    """Return a user's saved conversation, oldest first."""
+    client = _supabase_client()
+    if client is None:
+        return []
+    rows = client.table("chat_messages").select("role,content,created_at").eq("user_id", user_id).order(
+        "created_at", desc=True
+    ).limit(max(1, min(limit, 500))).execute().data
+    return list(reversed(rows))
