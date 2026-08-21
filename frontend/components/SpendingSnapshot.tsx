@@ -6,8 +6,8 @@ import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 
 import { formatCurrency } from "@/lib/format";
 import type { Transaction } from "@/lib/types";
 
-const BAR_COLOR = "#1e5f52"; // --color-ledger, hardcoded: recharts renders to SVG fill attrs, which don't resolve CSS custom properties reliably across browsers
-const BAR_COLOR_MUTED = "#a9c4bd";
+const BAR_COLOR = "#c4941f"; // --color-gold, hardcoded: recharts renders to SVG fill attrs, which don't resolve CSS custom properties reliably across browsers
+const BAR_COLOR_MUTED = "#e2d3ab";
 
 export default function SpendingSnapshot({ transactions }: { transactions: Transaction[] }) {
   const { income, spend, currency, topCategories } = useMemo(() => {
@@ -47,7 +47,7 @@ export default function SpendingSnapshot({ transactions }: { transactions: Trans
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded-lg border border-border bg-surface px-3 py-2">
           <p className="text-[11px] uppercase tracking-wide text-mist">Income</p>
-          <p className="tabular-nums mt-0.5 text-sm font-medium text-ledger-dark">
+          <p className="tabular-nums mt-0.5 text-sm font-medium text-gold-deep">
             {formatCurrency(income, currency)}
           </p>
         </div>
@@ -68,18 +68,18 @@ export default function SpendingSnapshot({ transactions }: { transactions: Trans
                   type="category"
                   dataKey="category"
                   width={92}
-                  tick={{ fontSize: 11, fill: "#4b5563" }}
+                  tick={{ fontSize: 11, fill: "#6b6558" }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <Tooltip
-                  cursor={{ fill: "rgba(30,95,82,0.06)" }}
+                  cursor={{ fill: "rgba(196,148,31,0.08)" }}
                   formatter={(value) => formatCurrency(Number(value ?? 0), currency)}
                   labelFormatter={() => ""}
                   contentStyle={{
                     fontSize: 12,
                     borderRadius: 8,
-                    border: "1px solid #e1e3da",
+                    border: "1px solid #e7e2d4",
                     boxShadow: "none",
                   }}
                 />

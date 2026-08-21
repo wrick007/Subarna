@@ -38,8 +38,8 @@ load_dotenv(REPO_ROOT / "backend" / ".env", override=True)
 #: app.py already reads, so a single .env works for either frontend.
 DB_PATH = os.environ.get("FINMATE_DB_PATH", str(REPO_ROOT / "data" / "finmate.db"))
 
-#: Embedded Qdrant on-disk path. Override with FINMATE_QDRANT_PATH.
-QDRANT_PATH = os.environ.get("FINMATE_QDRANT_PATH", str(REPO_ROOT / "data" / "qdrant_store"))
+#: Embedded Chroma on-disk path. Override with FINMATE_CHROMA_PATH.
+CHROMA_PATH = os.environ.get("FINMATE_CHROMA_PATH", str(REPO_ROOT / "data" / "chroma_store"))
 
 #: Comma-separated list of allowed CORS origins for the deployed frontend,
 #: e.g. "https://finmate.vercel.app,https://finmate-ai.example.com".
@@ -55,7 +55,7 @@ FRONTEND_ORIGINS = [
     if origin.strip()
 ]
 
-#: Pre-load the embedder/cross-encoder/Qdrant client at startup (see
+#: Pre-load the embedder/cross-encoder/Chroma client at startup (see
 #: finmate/rag.py:warm_up) rather than on the first request. On by
 #: default; the only reason to turn it off is a platform with a strict
 #: startup-time budget where you'd rather eat the cost on first request

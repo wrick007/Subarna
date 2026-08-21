@@ -3,13 +3,14 @@ import { Calculator, FileWarning, Sparkles } from "lucide-react";
 import { formatDate, formatSignedCurrency } from "@/lib/format";
 import type { ChatApiResponse, EvidenceItem } from "@/lib/types";
 
-/** Stage badge color is drawn from the *existing* palette (ledger-soft /
- * brass-soft / plain border) rather than inventing a fourth accent color
- * just to color-code three retrieval tiers -- see globals.css's token
- * comment on keeping brass meaningful by not spreading it everywhere. */
+/** Only the top retrieval tier (rerank) gets the brand gold -- see
+ * globals.css's token comment on spending it only where the product
+ * does its distinctive work, not as decoration across three badge
+ * variants that most people will never need to tell apart. The other
+ * two tiers fall back to plain neutral/border treatments. */
 function stageBadgeClasses(stage: string): string {
-  if (stage === "rerank") return "bg-brass-soft text-brass border-brass/30";
-  if (stage === "vector") return "bg-ledger-soft text-ledger-dark border-ledger/20";
+  if (stage === "rerank") return "bg-gold-soft text-gold-deep border-gold/30";
+  if (stage === "vector") return "bg-paper text-ink-soft border-border";
   if (stage === "keyword") return "bg-paper text-ink-soft border-border";
   return "bg-paper text-mist border-border";
 }
@@ -38,9 +39,11 @@ function EvidenceRow({ item }: { item: EvidenceItem }) {
           )}
         </div>
       </div>
-      <span
-        className={`tabular-nums shrink-0 text-sm font-medium ${item.amount < 0 ? "text-ink" : "text-ledger-dark"}`}
-      >
+      {/* formatSignedCurrency already prefixes +/-, so the sign alone
+          carries income-vs-spend meaning -- no separate color-coding
+          needed here, which also keeps gold from being spent on
+          something that isn't this app's distinctive work. */}
+      <span className="tabular-nums shrink-0 text-sm font-medium text-ink">
         {formatSignedCurrency(item.amount, item.currency)}
       </span>
     </li>

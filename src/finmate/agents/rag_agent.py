@@ -50,6 +50,12 @@ def run_retrieval(
     one fresh dict per user turn so a Critic-triggered retry of this
     stage doesn't repeat the same retrieval work. None (the default)
     disables it, unchanged from before this parameter existed.
+
+    Forwards `router_output.search_phrasings` (Priority-2 call-count
+    reduction -- see `schemas.RouterOutput.search_phrasings` and
+    `rag.retrieve`'s `precomputed_phrasings` parameter) so stage 2 of
+    `rag.retrieve` reuses what the router already produced instead of
+    making its own query-rewrite call.
     """
     return rag.retrieve(
         user_id=user_id,
@@ -59,4 +65,5 @@ def run_retrieval(
         db_path=db_path,
         llm_client=llm_client,
         cache=cache,
+        precomputed_phrasings=router_output.search_phrasings,
     )

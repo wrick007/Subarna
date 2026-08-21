@@ -1,5 +1,6 @@
 import type {
   ChatApiResponse,
+  ChatHistoryTurn,
   DeleteUserResponse,
   HealthResponse,
   ProfileResponse,
@@ -61,14 +62,111 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface ChatStreamCallbacks {
+  onToken: (text: string) => void;
+  onRestart: () => void;
+  onDone: (response: ChatApiResponse) => void;
+  onError: (message: string) => void;
+}
+
+/**
+ * Consumes POST /api/chat/stream's Server-Sent Events -- see
+ * backend/app/routers/chat.py's `_sse`/`_event_stream` for the exact
+ * wire format parsed below (an `event:` line, a `data:` line holding
+ * one JSON object, then a blank line). Deliberately not the browser's
+ * built-in `EventSource`: that API can only send GET requests with no
+ * body, and this endpoint needs the user's message and history in a
+ * POST body -- so this reads the fetch() response body as a stream
+ * directly instead and parses the same wire format by hand.
+ *
+ * Every event type has its own callback (rather than one generic
+ * `onEvent(name, data)`) so a caller can't forget to handle "error" and
+ * silently swallow a failed stream -- see ChatShell.tsx's usage.
+ */
+async function chatStream(
+  userId: string,
+  message: string,
+  history: ChatHistoryTurn[],
+  callbacks: ChatStreamCallbacks,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, message, history }),
+    });
+  } catch {
+    callbacks.onError(
+      `Could not reach the backend at ${API_BASE_URL}. Is it running, and is NEXT_PUBLIC_API_URL set correctly?`,
+    );
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    let detail = res.statusText || `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // Response body wasn't JSON -- the statusText fallback above covers it.
+    }
+    callbacks.onError(detail);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Events are separated by a blank line. A network chunk boundary can
+    // land mid-event, so only fully-received events (everything up to
+    // the last "\n\n" seen so far) are parsed on each pass -- a trailing
+    // partial event stays in `buffer` for the next read to complete.
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      const lines = rawEvent.split("\n");
+      const eventLine = lines.find((l) => l.startsWith("event: "));
+      const dataLine = lines.find((l) => l.startsWith("data: "));
+
+      if (eventLine && dataLine) {
+        const eventName = eventLine.slice("event: ".length);
+        try {
+          const data = JSON.parse(dataLine.slice("data: ".length));
+          if (eventName === "token") callbacks.onToken((data as { text: string }).text);
+          else if (eventName === "restart") callbacks.onRestart();
+          else if (eventName === "error") callbacks.onError((data as { message: string }).message);
+          else if (eventName === "done") callbacks.onDone(data as ChatApiResponse);
+        } catch {
+          // A malformed event is dropped rather than crashing the whole
+          // stream -- one bad chunk shouldn't take down an otherwise
+          // fine response.
+        }
+      }
+
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export const api = {
   health: () => request<HealthResponse>("/api/health"),
 
-  chat: (userId: string, message: string) =>
+  chat: (userId: string, message: string, history: ChatHistoryTurn[] = []) =>
     request<ChatApiResponse>("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ user_id: userId, message }),
+      body: JSON.stringify({ user_id: userId, message, history }),
     }),
+
+  chatStream,
 
   getProfile: (userId: string) =>
     request<ProfileResponse>(`/api/users/${encodeURIComponent(userId)}/profile`),

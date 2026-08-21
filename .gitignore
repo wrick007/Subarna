@@ -4,9 +4,9 @@ __pycache__/
 venv/
 .env
 data/finmate.db
-data/qdrant_store/
+data/chroma_store/
 data/eval_finmate.db
-data/eval_qdrant_store/
+data/eval_chroma_store/
 data/rag_eval_results.json
 *.egg-info/
 .pytest_cache/

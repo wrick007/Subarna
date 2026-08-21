@@ -1,17 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, IBM_Plex_Mono, Inter } from "next/font/google";
+import { IBM_Plex_Mono, Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
-// Three type roles, deliberately not the same pairing you'd reach for
-// on any other project (see globals.css's token comment): Fraunces for
-// the wordmark and section headers (characterful, used sparingly), Inter
-// for everything else UI/prose, and IBM Plex Mono specifically for
-// monetary figures so amounts line up like a printed statement.
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
+// Three type roles (see globals.css's token comment for the reasoning
+// behind each): Space Grotesk for the wordmark only -- a single glance
+// per screen, not a running display face -- Inter for everything else
+// UI/prose, and IBM Plex Mono specifically for monetary figures so
+// amounts line up like a printed statement.
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
   weight: ["500", "600"],
-  style: ["normal", "italic"],
 });
 
 const inter = Inter({
@@ -35,7 +34,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f3f4ee",
+  themeColor: "#faf8f3",
 };
 
 export default function RootLayout({
@@ -44,7 +43,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${inter.variable} ${plexMono.variable} h-full`}
+      className={`${spaceGrotesk.variable} ${inter.variable} ${plexMono.variable} h-full`}
     >
       <body className="h-full bg-paper text-ink antialiased">{children}</body>
     </html>

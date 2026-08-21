@@ -1,6 +1,6 @@
 """
 Tests for finmate.rag's metadata-filter path and documented fallback
-behavior. Deliberately does NOT test the Qdrant/sentence-transformers
+behavior. Deliberately does NOT test the Chroma/sentence-transformers
 vector path, since those are lazily-imported optional dependencies (see
 rag.py's module docstring) -- this suite only exercises the parts that
 must work with zero network access and no extra ML install.
@@ -41,11 +41,11 @@ def test_retrieve_with_no_candidates_returns_empty(db_path):
 def test_retrieve_falls_back_when_vector_index_unavailable(db_path, tmp_path):
     txs = [Transaction(user_id="u1", date="2026-06-01", description="Rent", amount=-32000, category="Rent")]
     db.insert_transactions(txs, db_path=db_path)
-    # No vector index has been built for this user/qdrant_path, so even with
+    # No vector index has been built for this user/chroma_path, so even with
     # a query string this must fall back to metadata-only results rather
     # than erroring.
     result = rag.retrieve(
-        "u1", query="rent payment", db_path=db_path, qdrant_path=str(tmp_path / "unused_qdrant"),
+        "u1", query="rent payment", db_path=db_path, chroma_path=str(tmp_path / "unused_chroma"),
     )
     assert result.vector_search_used is False
     assert len(result.evidence) == 1

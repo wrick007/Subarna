@@ -64,9 +64,10 @@ for why.
 Persistence:
 - **SQLite** (`finmate/db.py`, stdlib `sqlite3`, no ORM) for the structured
   profile (JSON blob, one row per user) and a normalized transactions table.
-- **Qdrant in embedded/on-disk mode** (`QdrantClient(path=...)`) for the
-  vector half of retrieval, using `sentence-transformers` locally. Both are
-  imported lazily (see Deviations) so the core engine works without them.
+- **ChromaDB in embedded/on-disk mode** (`chromadb.PersistentClient(path=...)`)
+  for the vector half of retrieval, using `sentence-transformers` locally.
+  Both are imported lazily (see Deviations) so the core engine works
+  without them.
 
 LLM: the `openai` Python SDK used as an **OpenAI-compatible client**, one
 shared wrapper (`finmate/llm.py:LLMClient`), pointed at whichever free-tier
@@ -92,9 +93,15 @@ query, filters
 2. Query rewrite (OPTIONAL, ≤1 Groq/Gemini call, finmate/query_rewrite.py)
    — expands the query into 2-3 short search-oriented phrasings (e.g.
    "food expenses" -> "dining", "groceries") to help stage 3 match
-   transactions with no literal keyword overlap. Cached per (user_id,
-   normalized query); skips cleanly on any failure, a missing key, or
-   FINMATE_RAG_MODE=no_llm.
+   transactions with no literal keyword overlap. As of the "fewer
+   sequential calls" pipeline redesign (see orchestrator.py), the Stage
+   14 Router already produces these phrasings itself in its one call
+   (`schemas.RouterOutput.search_phrasings`) -- this stage only makes
+   its *own* separate call when a caller reaches `rag.retrieve()`
+   directly without going through the router (`scripts/eval_rag.py`, or
+   a test), via `rag.retrieve`'s `precomputed_phrasings` parameter.
+   Cached per (user_id, normalized query) either way; skips cleanly on
+   any failure, a missing key, or FINMATE_RAG_MODE=no_llm.
    │
    ▼
 3. Keyword search (finmate/keyword_search.py) — SQLite FTS5, probed at
@@ -103,9 +110,11 @@ query, filters
    from stage 2 (plus the original query), best score per transaction.
    │
    ▼
-4. Dense vector search (Qdrant + sentence-transformers, reused from the
-   pre-upgrade implementation) — scoped to the metadata-filtered
-   candidate set via a Qdrant payload filter (see "Deviations" below).
+4. Dense vector search (ChromaDB + sentence-transformers; migrated from
+   an earlier Qdrant-based implementation, same architecture, same
+   embedding model, different storage/search library — see "ChromaDB
+   migration" below) — scoped to the metadata-filtered candidate set via
+   a Chroma `where` metadata filter (see "Deviations" below).
    │
    ▼
 5. Fusion (finmate/reranker.py:reciprocal_rank_fusion) — Reciprocal Rank
@@ -177,7 +186,7 @@ detail lives in each module's docstring; summary:
 
 | Change | Where | Effect |
 |---|---|---|
-| Model/client singletons | `finmate/rag.py`, `finmate/reranker.py` | The embedder, the Qdrant client, and the cross-encoder each loaded fresh on *every single retrieval call* before this change — by far the slowest thing in the pipeline. Now cached per process (thread-safe, including a failed load, so an unreachable model fails fast instead of re-attempting a network fetch each time). |
+| Model/client singletons | `finmate/rag.py`, `finmate/reranker.py` | The embedder, the Chroma client, and the cross-encoder each loaded fresh on *every single retrieval call* before this change — by far the slowest thing in the pipeline. Now cached per process (thread-safe, including a failed load, so an unreachable model fails fast instead of re-attempting a network fetch each time). |
 | Concurrency | `finmate/rag.py:retrieve` | Vector search depends only on the query text, never on query-rewrite's output, so it now runs on a background thread starting *before* query rewrite (an LLM network call) even begins, instead of waiting behind it. Wall-clock cost drops from roughly `rewrite + keyword + vector` to roughly `max(vector, rewrite + keyword)`. |
 | Batched keyword search | `finmate/keyword_search.py:keyword_rank_multi` | Ranking the candidate set against the original query *and* every query-rewrite phrasing used to rebuild the FTS5/BM25 index from scratch per phrasing (up to 4x). Now built once, queried once per phrasing. |
 | Request-scoped retrieval cache | `finmate/rag.py:retrieve(cache=...)` | Off by default. The orchestrator passes a fresh dict per user turn, so a Critic-triggered retry — which re-runs this exact pipeline stage for the exact same query — hits an in-memory cache instead of redoing keyword+vector+rerank (and a second query-rewrite call) from scratch. |
@@ -202,8 +211,8 @@ python scripts/eval_rag.py --with-query-rewrite # also exercise stage 2 (needs a
 ```
 
 Seeds an isolated copy of the demo data at `data/eval_finmate.db` /
-`data/eval_qdrant_store` (never touches your real `data/finmate.db` /
-`data/qdrant_store`), runs it against 19 hand-labeled queries in
+`data/eval_chroma_store` (never touches your real `data/finmate.db` /
+`data/chroma_store`), runs it against 19 hand-labeled queries in
 `data/rag_eval_set.json`, and prints Recall@5, Recall@10, and MRR —
 macro-averaged across queries and broken down by query type — for both
 the new pipeline and a frozen snapshot of the pre-upgrade one, so the
@@ -249,8 +258,10 @@ part of this README snapshot.)*
 
 - **Two real bugs, found by actually running the pre-upgrade code, not
   just theoretical robustness improvements:**
-  1. `_get_embedder`/`_get_qdrant_client` previously only guarded the
-     *import* of `sentence-transformers`/`qdrant-client`
+  1. `_get_embedder`/`_get_chroma_client` (at the time of this bug,
+     `_get_qdrant_client` — renamed by the later ChromaDB migration, see
+     "ChromaDB migration" below) previously only guarded the *import* of
+     `sentence-transformers`/the vector-store client package
      (`except ImportError`), not *construction*. If the package is
      installed but the model can't be downloaded — verified as a real
      failure mode in this build's sandbox, which can reach PyPI but not
@@ -266,22 +277,26 @@ part of this README snapshot.)*
      a larger collection, a relevant item can be missed entirely if it
      doesn't fall within the top-`limit` global hits, even when it would
      be the best match *within* the candidate set. Fixed by moving the
-     filter into the query itself (a Qdrant payload filter, `source_id`
-     `MatchAny` the candidate IDs) — proven with a deterministic
+     filter into the query itself — at the time, a Qdrant payload filter
+     (`source_id` `MatchAny` the candidate IDs); carried forward as a
+     Chroma `where={"source_id": {"$in": [...]}}` metadata filter by the
+     later ChromaDB migration, same fix, different library's syntax for
+     it (see "ChromaDB migration" below) — proven with a deterministic
      regression test
      (`tests/test_rag_hybrid.py::test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit`,
      `limit=1` against 5 identically-scored out-of-candidate-set "noise"
      points), not just asserted.
 - **This build's sandbox could reach PyPI but not Hugging Face Hub or the
   Groq/Gemini APIs** (verified empirically, not assumed). `rank-bm25`,
-  `qdrant-client`, and `sentence-transformers` are genuinely installed and
-  exercised in this build's test suite (keyword search, RRF fusion, and
-  the Qdrant wiring above are verified against real code, real embedded
-  Qdrant); the embedding model and cross-encoder weights could not be
-  downloaded, so those two stages were verified with fake/mocked scores
-  instead (unit tests, no model download needed) plus their real
-  graceful-fallback path, which is exactly the condition this sandbox is
-  actually in.
+  the vector-store client (`qdrant-client` at the time; `chromadb` as of
+  the later migration), and `sentence-transformers` are genuinely
+  installed and exercised in this build's test suite (keyword search,
+  RRF fusion, and the vector-store wiring above are verified against
+  real code, a real embedded on-disk index); the embedding model and
+  cross-encoder weights could not be downloaded, so those two stages
+  were verified with fake/mocked scores instead (unit tests, no model
+  download needed) plus their real graceful-fallback path, which is
+  exactly the condition this sandbox is actually in.
 - **`rank_bm25`'s classic IDF formula can legitimately score every term
   as exactly 0.0** for a genuine match in a small enough corpus (verified
   directly against the installed package: a term appearing in exactly
@@ -300,6 +315,60 @@ part of this README snapshot.)*
 - **Eval metrics are macro-averaged** across queries (each counts
   equally) rather than micro-averaged, since `semantic_food_expenses` has
   17 gold items by design versus 2 for most `exact_keyword` queries.
+
+### ChromaDB migration — deviations, and why
+
+*(A later, separate change from the hybrid-retrieval upgrade above: same
+architecture — still a local, file-backed, embedded vector index,
+still populated/queried with embeddings this codebase computes itself —
+just a different storage/search library. See `finmate/rag.py`'s module
+docstring "ChromaDB migration" for the full technical writeup this
+section summarizes.)*
+
+- **Chroma's default distance metric is L2 (squared Euclidean), not
+  cosine** — confirmed against a real embedded Chroma index during this
+  migration, not assumed from documentation. The pre-migration Qdrant
+  collection was created with `Distance.COSINE` explicitly; silently
+  keeping Chroma's default would have changed *ranking*, not just
+  storage. Every collection is now created with
+  `metadata={"hnsw:space": "cosine"}` to match.
+- **Chroma's `query()` returns cosine *distance* (lower = more
+  relevant), not *similarity* (higher = more relevant) like Qdrant's
+  `point.score` was** — also confirmed empirically, and easy to miss
+  since both are "a score between roughly 0 and 1" and neither the
+  Chroma nor (from memory) the Qdrant docs make the direction hard to
+  misread at a glance. `finmate/rag.py:_vector_search` converts back
+  (`similarity = 1 - distance`) before storing into `vector_score`, so
+  "higher is better" holds exactly as before for every downstream reader
+  — proven by `tests/test_rag_hybrid.py::test_vector_search_score_is_similarity_not_raw_chroma_distance`,
+  not just asserted. The *ordering* Chroma already returns results in
+  (nearest-first) needed no equivalent fix — only the numeric score did.
+- **Chroma does not enforce one open client per on-disk path the way
+  embedded-mode Qdrant did** — confirmed by opening two `PersistentClient`
+  instances at the same path in the same process during this migration;
+  both worked fine. `_get_chroma_client`'s caching is kept anyway (purely
+  for the same speed reason as `_get_embedder`'s — see "Performance"
+  above — not because a second client would misbehave).
+- **Retrieval-quality numbers (Recall@5/Recall@10/MRR) were not
+  re-measured against a real embedding model as part of this migration**
+  — this build's sandbox cannot reach Hugging Face Hub (same constraint
+  as the RAG upgrade above), so `scripts/eval_rag.py` could not download
+  `all-MiniLM-L6-v2` here either. What this migration *does* establish
+  without a real model: `scripts/eval_rag.py` runs end-to-end against the
+  new Chroma-backed index and degrades exactly as documented when the
+  model is unavailable (verified directly, not assumed), and every
+  Chroma-specific behavior above (`where` filtering never returning an
+  out-of-candidate-set result, the distance/similarity conversion, the
+  existence-check-on-a-missing-collection fallback) is proven with fake,
+  dependency-free embeddings the same way the original Qdrant wiring was
+  (see `tests/test_rag_hybrid.py`'s `_ConstantFakeEmbedder`). Retrieval
+  behavior is unchanged in every way that doesn't require a real model to
+  observe; **re-run `python scripts/eval_rag.py` somewhere with Hugging
+  Face Hub access and compare against the Recall/MRR figures in
+  "Evaluate retrieval quality" above before relying on this in
+  production** — they should land close (same embedding model, same
+  underlying vectors, same fusion/rerank logic), and this is the one
+  claim in this migration that genuinely could not be verified here.
 
 ## LLM provider (free tier)
 
@@ -419,14 +488,38 @@ path (still passing, unchanged). `tests/test_keyword_search.py`,
 `tests/test_rag_hybrid.py` cover the hybrid pipeline added in the RAG
 upgrade — the fallback chain at every level, RRF fusion math,
 cross-encoder rerank fallback, query-rewrite caching/skip-on-failure
-(mocked `LLMClient`, no real call), and the Qdrant candidate-set-filter
-fix (real embedded on-disk Qdrant, fake dependency-free embeddings — no
-model download). **All 128 tests pass with only `pydantic`, `pytest`, and
-the stdlib installed** — verified in a clean virtualenv with
-`sentence-transformers`, `qdrant-client`, `rank-bm25`, and `openai` all
-absent; the handful of tests that specifically test one of those
-packages' integration skip themselves rather than failing when it's not
-installed.
+(mocked `LLMClient`, no real call), and the vector-store candidate-set-filter
+fix (real embedded on-disk Chroma, fake dependency-free embeddings — no
+model download; see "ChromaDB migration" above). **These, plus
+`test_casual.py`, `test_seed_demo_data.py`, and `test_llm.py`, pass with
+only `pydantic`, `pytest`, and the stdlib installed** — verified in a
+clean virtualenv with `sentence-transformers`, `chromadb`, `rank-bm25`,
+`langgraph`, and `openai` all absent; the handful of tests that
+specifically test one of those packages' integration skip themselves
+rather than failing when it's not installed.
+
+**211 tests total.** The remaining files
+(`test_conversation_memory.py`, `test_call_reduction.py`,
+`test_streaming.py` — everything exercising `finmate/orchestrator.py`
+directly) need `langgraph`, `langchain-core`, and `openai` — this was
+already true of `orchestrator.py` itself before this build (it's always
+imported `langgraph` unconditionally, unlike the genuinely-optional ML/
+vector-store backends above, which have real fallback paths); this
+build is simply the first to add test coverage that touches it, so it's
+the first point where that floor became visible via a graceful
+`pytest.importorskip` skip rather than an untested assumption.
+`test_chat_endpoint.py` and `test_end_to_end.py` additionally need
+`fastapi`/`httpx` (from `backend/requirements.txt`, additive to the
+root `requirements.txt` — see that file's own comment), since they test
+the backend directly via `TestClient`, not the engine in isolation.
+Verified directly, not assumed: with only `pydantic` + `pytest` +
+`openai` + `langgraph` + `langchain-core` + `python-dotenv` installed
+(no `fastapi`, `httpx`, `chromadb`, `sentence-transformers`, or
+`rank-bm25`), the suite reports 191 passed, 14 skipped, zero errors —
+every currently-absent-dependency case degrades to a clean skip, never
+a collection failure. **All 211 pass with the full dependency set from
+`requirements.txt` + `backend/requirements.txt` installed** (matching
+what an actual deployment runs).
 
 See "RAG retrieval" above for how to run `scripts/eval_rag.py` and the
 measured before/after retrieval-quality numbers.
@@ -442,7 +535,7 @@ Everything below is specifically about deploying `app.py`, the Streamlit
 app, on its own.
 
 FinMate AI is a stateful Streamlit app: both its databases
-(`data/finmate.db` — SQLite, and `data/qdrant_store` — embedded Qdrant)
+(`data/finmate.db` — SQLite, and `data/chroma_store` — embedded Chroma)
 are **plain files on local disk**, not a managed service. That one fact
 drives every choice below — pick based on whether you need that data to
 survive a restart/redeploy.
@@ -473,7 +566,7 @@ data — see the warning below.
    in-app seed button.
 6. **⚠️ Ephemeral filesystem.** Community Cloud containers are recreated
    on redeploy, and may also restart on their own after inactivity —
-   `data/finmate.db` and `data/qdrant_store` do **not** persist across
+   `data/finmate.db` and `data/chroma_store` do **not** persist across
    that. Either treat this as a demo that reseeds itself on boot (e.g.
    call `seed_demo_data.py`'s logic at the top of `app.py` if the DB file
    doesn't exist yet — not wired in by default, to avoid silently

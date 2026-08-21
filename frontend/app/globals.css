@@ -1,28 +1,43 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------
-   FinMate AI design tokens.
+   FinMate AI design tokens -- Priority 5 redesign.
 
-   Palette is a "modern ledger" -- deliberately not the cream+terracotta
-   or near-black+acid-accent looks that AI-generated UIs default to.
-   Paper is a cool, pale sage-grey (not cream); the brand color is a
-   deep ledger teal; brass is reserved *only* for this app's signature
-   trust element (the "Verified" strip -- see VerifiedStrip.tsx), never
-   used as a general accent, so it stays meaningful.
+   COLOR: gold, not the cream+terracotta or near-black+acid-accent looks
+   AI-generated UIs default to (see frontend-design skill). Grounded in
+   the actual subject, not decoration: gold/value is money's own
+   vernacular -- "gold standard," a coin, a ledger's brass fittings --
+   which is also a direct continuation of this app's *previous* design
+   (a teal "ledger" palette that reserved brass *only* for its evidence
+   panel, deliberately never as a general accent). This redesign commits
+   to the opposite move: what used to be the one reserved accent is now
+   the whole identity, spent specifically where the product does its
+   distinctive work (a live streaming reply, a verified-evidence badge),
+   not painted across every surface as decoration -- large surfaces
+   (paper, cards, borders) stay quiet and neutral so the gold keeps
+   meaning something when it appears. Paper is a barely-warm off-white,
+   short of cream's saturation on purpose; there is no dark mode here,
+   so there's no near-black surface for a gold accent to read as the
+   acid-on-black default either.
+
+   TYPE: Space Grotesk for the wordmark (used exactly once per screen,
+   not as a running display face) + Inter for every UI/body role,
+   unchanged from before -- an excellent, quiet workhorse for dense chat
+   text, which is exactly what a body face should be. IBM Plex Mono
+   still carries tabular figures for money, for the same reason as
+   before: amounts should line up like a printed statement.
 ------------------------------------------------------------------------ */
 
 :root {
-  --color-paper: #f3f4ee;
+  --color-paper: #faf8f3;
   --color-surface: #ffffff;
-  --color-ink: #14181a;
-  --color-ink-soft: #4b5563;
-  --color-mist: #6b7280;
-  --color-border: #e1e3da;
-  --color-ledger: #1e5f52;
-  --color-ledger-dark: #143f37;
-  --color-ledger-soft: #e6efec;
-  --color-brass: #c08a2e;
-  --color-brass-soft: #f6ecd9;
+  --color-ink: #201c13;
+  --color-ink-soft: #6b6558;
+  --color-mist: #8a8374;
+  --color-border: #e7e2d4;
+  --color-gold: #c4941f;
+  --color-gold-deep: #8a6816;
+  --color-gold-soft: #faf0d8;
   --color-brick: #b3452b;
   --color-brick-soft: #f8e9e4;
 }
@@ -34,15 +49,13 @@
   --color-ink-soft: var(--color-ink-soft);
   --color-mist: var(--color-mist);
   --color-border: var(--color-border);
-  --color-ledger: var(--color-ledger);
-  --color-ledger-dark: var(--color-ledger-dark);
-  --color-ledger-soft: var(--color-ledger-soft);
-  --color-brass: var(--color-brass);
-  --color-brass-soft: var(--color-brass-soft);
+  --color-gold: var(--color-gold);
+  --color-gold-deep: var(--color-gold-deep);
+  --color-gold-soft: var(--color-gold-soft);
   --color-brick: var(--color-brick);
   --color-brick-soft: var(--color-brick-soft);
 
-  --font-display: var(--font-fraunces);
+  --font-display: var(--font-space-grotesk);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-plex-mono);
 }
@@ -61,12 +74,9 @@ body {
   font-family: var(--font-sans);
 }
 
-/* Tabular figures for every monetary/numeric readout -- see globals.css
-   token comment above: this is the one deliberate typographic risk the
-   design takes, grounded in the subject (a finance app's numbers should
-   line up like a printed statement, not wobble with proportional
-   widths). Applied via the .tabular-nums utility class, not globally,
-   so prose text keeps Inter's normal proportional numerals. */
+/* Tabular figures for every monetary/numeric readout -- see token
+   comment above. Applied via the .tabular-nums utility class, not
+   globally, so prose text keeps Inter's normal proportional numerals. */
 .tabular-nums {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -74,8 +84,8 @@ body {
 }
 
 ::selection {
-  background: var(--color-ledger-soft);
-  color: var(--color-ledger-dark);
+  background: var(--color-gold-soft);
+  color: var(--color-gold-deep);
 }
 
 /* Respect reduced-motion preferences (see frontend-design skill's
@@ -92,9 +102,11 @@ body {
   }
 }
 
-/* Minimal prose styling for assistant messages (finmate's formatter
-   agent output: short paragraphs, occasional bold/emphasis, and lists --
-   never deeply nested or exotic enough to justify pulling in the full
+/* Minimal prose styling for assistant messages (finmate's synthesis
+   agent output -- see finmate/agents/synthesis.py -- which as of the
+   Priority-2 pipeline redesign produces the final reply directly:
+   short paragraphs, occasional bold/emphasis, and lists -- never deeply
+   nested or exotic enough to justify pulling in the full
    @tailwindcss/typography plugin for six selectors). */
 .prose-chat p {
   margin: 0 0 0.6em;
@@ -131,13 +143,13 @@ body {
   font-size: 0.9em;
 }
 .prose-chat a {
-  color: var(--color-ledger);
+  color: var(--color-gold-deep);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-/* Thin, quiet scrollbars matching the ledger aesthetic (WebKit-based
-   browsers only -- this is progressive enhancement, not load-bearing). */
+/* Thin, quiet scrollbars (WebKit-based browsers only -- this is
+   progressive enhancement, not load-bearing). */
 .themed-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;

@@ -9,7 +9,7 @@ This app is two deployable pieces talking to each other over HTTPS:
 │                           │                                │                                │
 │  Chat UI, evidence panel │        NEXT_PUBLIC_API_URL     │  src/finmate/ (the actual      │
 │  spending snapshot        │        FINMATE_FRONTEND_ORIGINS│  multi-agent engine) + SQLite  │
-└─────────────────────────┘                                │  + optional embedded Qdrant    │
+└─────────────────────────┘                                │  + optional embedded Chroma      │
                                                               └──────────────────────────────┘
                                                                           │
                                                                           ▼
@@ -22,7 +22,7 @@ Vercel and Render are the two named in this guide because they're a genuine
 good fit, not just familiar names: Vercel is where Next.js deploys with
 zero configuration, and Render runs an arbitrary Docker container with a
 persistent disk — which this backend needs, since its dependencies
-(`sentence-transformers`, `torch`, an embedded Qdrant index) are too heavy
+(`sentence-transformers`, `torch`, an embedded Chroma index) are too heavy
 for Vercel's serverless functions (function size and execution-time limits
 that a torch-based ML backend routinely exceeds). "Anything else" that also
 fits the backend's actual requirements — a Dockerfile, a process listening
@@ -113,7 +113,7 @@ repo):
    | `GROQ_API_KEY` | your key (or `GEMINI_API_KEY` if using Gemini) |
    | `FINMATE_FRONTEND_ORIGINS` | `https://your-frontend.vercel.app` (placeholder for now — you'll update this in Part 3) |
    | `FINMATE_DB_PATH` | `/app/data/finmate.db` |
-   | `FINMATE_QDRANT_PATH` | `/app/data/qdrant_store` |
+   | `FINMATE_CHROMA_PATH` | `/app/data/chroma_store` |
    | `FINMATE_WARM_UP_ON_STARTUP` | `true` |
 
 8. If you want persistence (Starter plan or higher): **Add Disk**, mount
@@ -129,7 +129,7 @@ curl https://YOUR-BACKEND-URL.onrender.com/api/health
 Expect something like:
 
 ```json
-{"status": "ok", "llm_configured": true, "provider": "groq", "model": "...", "warm_up": {"embedder": true, "qdrant_client": true, "cross_encoder": true}}
+{"status": "ok", "llm_configured": true, "provider": "groq", "model": "...", "warm_up": {"embedder": true, "chroma_client": true, "cross_encoder": true}}
 ```
 
 `"status": "ok"` even with `"llm_configured": false` is normal and by
@@ -355,7 +355,7 @@ on a repo checked out before that default existed, add
 `ENABLE_RERANKER=false` (or just remove any `ENABLE_RERANKER=true` you
 set) to the service's environment variables on Render and redeploy. If
 it's *still* OOMing with reranking off, that means even the embedder
-alone plus FastAPI plus Qdrant's embedded index doesn't fit in 512MB in
+alone plus FastAPI plus Chroma's embedded index doesn't fit in 512MB in
 your case — at that point the fix genuinely is a bigger instance type,
 not a further code change.
 

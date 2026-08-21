@@ -13,7 +13,7 @@
 # Persistent disk: NOT included below, because free-tier services can't
 # have one at all (Render requires Starter or higher for a disk) -- see
 # DEPLOYMENT.md's "Persistence, cost, and what's realistic". That means
-# data/finmate.db and the optional Qdrant vector index live only on the
+# data/finmate.db and the optional Chroma vector index live only on the
 # container's local, ephemeral disk: they reset to empty on every
 # restart, redeploy, or free-tier spin-down/spin-up. Fine for a
 # portfolio/demo deployment -- just re-run POST /api/users/seed-demo-data
@@ -39,8 +39,8 @@ services:
         value: https://your-frontend.vercel.app # update after your Vercel deploy -- see DEPLOYMENT.md
       - key: FINMATE_DB_PATH
         value: /app/data/finmate.db
-      - key: FINMATE_QDRANT_PATH
-        value: /app/data/qdrant_store
+      - key: FINMATE_CHROMA_PATH
+        value: /app/data/chroma_store
       - key: FINMATE_WARM_UP_ON_STARTUP
         value: "true"
       - key: ENABLE_RERANKER

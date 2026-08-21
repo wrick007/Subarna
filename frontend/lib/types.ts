@@ -42,12 +42,29 @@ export interface Calculation {
   source_ids: string[];
 }
 
+/** Wire shape for one prior turn sent up on `/api/chat` (mirrors
+ * backend/app/api_schemas.py's ChatMessageIn) -- short-term
+ * conversational memory, distinct from the profile facts
+ * (income/goals/etc.) the backend already persists on its own. See
+ * ChatShell.tsx's `historyForApi` for how this is built from
+ * `ChatMessage[]`. */
+export interface ChatHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface ChatApiResponse {
   response: string;
   is_casual: boolean;
   intent: string;
   risk_level: string;
   critic_passed: boolean;
+  /** Whether a verification pass actually ran (see backend/app/
+   * api_schemas.py's ChatResponse and finmate/orchestrator.py's
+   * "Critic: conditional, not always-on") -- distinct from
+   * critic_passed, which is also true when this is false. Used by
+   * VerifiedStrip.tsx to show three honest states instead of two. */
+  verification_ran: boolean;
   critic_retries_used: number;
   critic_errors: string[];
   critic_unsupported_claims: string[];
@@ -106,7 +123,12 @@ export interface HealthResponse {
  * a completed assistant reply (holds the full ChatApiResponse so
  * VerifiedStrip/EvidenceDrawer can render it); `pending`/`error` cover
  * the in-flight and failed states for the message the UI is currently
- * waiting on. */
+ * waiting on. `streaming` is Priority 2's addition: true from the first
+ * SSE "token" event (see lib/api.ts's `chatStream`) until "done" --
+ * distinct from `pending`, which covers the earlier gap before any
+ * token has arrived yet (router/pipeline still running, nothing to show
+ * but the thinking indicator). MessageBubble.tsx renders growing
+ * markdown, not the thinking indicator, once `streaming` flips on. */
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -114,5 +136,6 @@ export interface ChatMessage {
   createdAt: number;
   meta?: ChatApiResponse;
   pending?: boolean;
+  streaming?: boolean;
   error?: string;
 }

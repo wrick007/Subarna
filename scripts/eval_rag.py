@@ -16,10 +16,20 @@ Also runs a frozen snapshot of the pre-upgrade retrieve() (metadata
 filter -> optional single-pass vector rerank, no keyword stage, no
 fusion, no cross-encoder -- see `legacy_retrieve` below) for a genuine
 before/after comparison, not just an assertion that the new pipeline is
-better.
+better. `legacy_retrieve` reproduces the pre-fusion-upgrade RETRIEVAL
+PATTERN (crucially: no candidate-set scoping -- it fetches a fixed
+number of globally-ranked hits and filters down to the metadata-matched
+candidates afterward, in Python), not the pre-ChromaDB-migration
+STORAGE LIBRARY -- both `legacy_retrieve` and the current pipeline now
+read from the same Chroma-backed index (via the same `_get_chroma_client`/
+`index_transactions_for_user`), so this remains a genuine, runnable
+before/after of the retrieval fix even after the storage migration. See
+`tests/test_rag_hybrid.py::test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit`
+for a deterministic, isolated reproduction of the same gap this script
+measures in aggregate.
 
 Fully offline by default: builds an isolated demo DB + vector index (at
---db-path/--qdrant-path, which default to eval-only files so this never
+--db-path/--chroma-path, which default to eval-only files so this never
 touches a real seeded data/finmate.db), and makes zero LLM calls unless
 --with-query-rewrite is passed. Every optional stage degrades exactly the
 way finmate/rag.py documents if its dependency isn't available -- this
@@ -29,7 +39,7 @@ self-explanatory without cross-referencing the README.
 Usage:
     python scripts/eval_rag.py
     python scripts/eval_rag.py --with-query-rewrite
-    python scripts/eval_rag.py --db-path data/finmate.db --qdrant-path data/qdrant_store
+    python scripts/eval_rag.py --db-path data/finmate.db --chroma-path data/chroma_store
 """
 
 from __future__ import annotations
@@ -59,15 +69,15 @@ RETRIEVE_DEPTH = 10  # one ranked list per query; Recall@5/@10/MRR are all slice
 # ---------------------------------------------------------------------------
 # Isolated seeding -- deliberately NOT importing scripts/seed_demo_data.py:
 # that script always builds its vector index at finmate.rag's *default*
-# qdrant_path, but this harness needs its own isolated qdrant_path (see
+# chroma_path, but this harness needs its own isolated chroma_path (see
 # module docstring) so a `python scripts/eval_rag.py` run never touches,
-# or is affected by, data/qdrant_store from a real seeded app instance.
+# or is affected by, data/chroma_store from a real seeded app instance.
 # This is a small, deliberate duplication of that script's CSV-loading
 # logic, not a divergence in what gets seeded -- same CSV, same fields.
 # ---------------------------------------------------------------------------
 
 
-def seed_eval_db(user_id: str, db_path: str, qdrant_path: str) -> tuple[list[Transaction], int]:
+def seed_eval_db(user_id: str, db_path: str, chroma_path: str) -> tuple[list[Transaction], int]:
     db.init_db(db_path)
     tx_path = DATA_DIR / "synthetic_transactions.csv"
     with tx_path.open(newline="") as f:
@@ -81,7 +91,7 @@ def seed_eval_db(user_id: str, db_path: str, qdrant_path: str) -> tuple[list[Tra
             if row["user_id"] == user_id
         ]
     db.insert_transactions(transactions, db_path=db_path)
-    indexed = rag.index_transactions_for_user(user_id, transactions, db_path=db_path, qdrant_path=qdrant_path)
+    indexed = rag.index_transactions_for_user(user_id, transactions, db_path=db_path, chroma_path=chroma_path)
     return transactions, indexed
 
 
@@ -112,19 +122,22 @@ def print_capability_report(caps: dict[str, str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frozen snapshot of the pre-upgrade retrieve() -- kept ONLY so this
-# harness can report a genuine before/after; not used anywhere else in
-# the app. Copied verbatim (logic-for-logic) from this repo's actual
-# finmate/rag.py as it existed before this build -- it already called
-# `.query_points()` rather than the now-removed `.search()`, so unlike a
-# separate copy of this codebase this build also touched, there's no
-# AttributeError guard needed here to keep it runnable. What it did NOT
-# have is a payload filter: it fetched a fixed number of *globally*-
-# ranked hits and filtered down to the metadata-filtered candidate set
-# afterward, in Python -- see README "Deviations" for why that's a real
-# gap, not just a style difference, and
-# tests/test_rag_hybrid.py::test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit
-# for a deterministic reproduction of it.
+# Frozen snapshot of the pre-fusion-upgrade retrieve() -- kept ONLY so
+# this harness can report a genuine before/after; not used anywhere else
+# in the app. The RETRIEVAL PATTERN (logic-for-logic) matches this
+# repo's actual finmate/rag.py exactly as it existed before the hybrid
+# keyword+vector+RRF+rerank upgrade -- what it did NOT have was a
+# candidate-set filter scoped into the query itself: it fetched a fixed
+# number of *globally*-ranked hits and filtered down to the
+# metadata-filtered candidate set afterward, in Python -- see README
+# "Deviations" for why that's a real gap, not just a style difference.
+#
+# Updated during the later Qdrant->ChromaDB storage migration to call
+# Chroma's API instead of Qdrant's (both this function and the current
+# pipeline read the same Chroma-backed index now -- see module
+# docstring) -- specifically still issuing `collection.query(...)` with
+# NO `where` filter, which is the actual behavior under test here, not
+# an incidental side effect of which client library is calling it.
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +146,7 @@ def legacy_retrieve(
     query: str,
     top_k: int,
     db_path: str,
-    qdrant_path: str,
+    chroma_path: str,
     embedding_model: str,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -154,21 +167,25 @@ def legacy_retrieve(
         return _recency(candidates)
 
     embedder = rag._get_embedder(embedding_model)
-    client = rag._get_qdrant_client(qdrant_path)
-    collection = f"{rag.COLLECTION_PREFIX}{user_id}"
-    if embedder is None or client is None or not client.collection_exists(collection):
+    client = rag._get_chroma_client(chroma_path)
+    collection_name = f"{rag.COLLECTION_PREFIX}{user_id}"
+    if embedder is None or client is None:
+        return _recency(candidates)
+    try:
+        collection = client.get_collection(name=collection_name)
+    except Exception:  # noqa: BLE001 -- collection not existing yet is routine here too
         return _recency(candidates)
 
     candidate_ids = {_key(t) for t in candidates}
     query_vector = embedder.encode([query])[0].tolist()
-    # No query_filter here -- this IS the pre-upgrade behavior being
+    # No `where` filter here -- this IS the pre-upgrade behavior being
     # measured, not a simplification for this script's sake.
-    search_result = client.query_points(collection_name=collection, query=query_vector, limit=top_k * 3)
-    hits = search_result.points
+    response = collection.query(query_embeddings=[query_vector], n_results=top_k * 3, include=["metadatas"])
+    result_metadatas = (response.get("metadatas") or [[]])[0]
 
     ranked: list[str] = []
-    for hit in hits:
-        source_id = (hit.payload or {}).get("source_id")
+    for metadata in result_metadatas:
+        source_id = (metadata or {}).get("source_id")
         if source_id in candidate_ids and source_id not in ranked:
             ranked.append(source_id)
         if len(ranked) >= top_k:
@@ -256,8 +273,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db-path", default=str(DATA_DIR / "eval_finmate.db"),
                          help="Isolated by default -- never touches your real data/finmate.db.")
-    parser.add_argument("--qdrant-path", default=str(DATA_DIR / "eval_qdrant_store"),
-                         help="Isolated by default -- never touches your real data/qdrant_store.")
+    parser.add_argument("--chroma-path", default=str(DATA_DIR / "eval_chroma_store"),
+                         help="Isolated by default -- never touches your real data/chroma_store.")
     parser.add_argument("--eval-set", default=str(DEFAULT_EVAL_SET_PATH))
     parser.add_argument("--with-query-rewrite", action="store_true",
                          help="Also exercise stage 2 (<=1 Groq/Gemini call per unique query, via "
@@ -276,8 +293,8 @@ def main() -> None:
     user_id = eval_set["user_id"]
 
     Path(args.db_path).unlink(missing_ok=True)
-    shutil.rmtree(args.qdrant_path, ignore_errors=True)
-    _transactions, indexed = seed_eval_db(user_id, args.db_path, args.qdrant_path)
+    shutil.rmtree(args.chroma_path, ignore_errors=True)
+    _transactions, indexed = seed_eval_db(user_id, args.db_path, args.chroma_path)
     print(f"Seeded {len(_transactions)} transactions for user_id={user_id!r} "
           f"({indexed} indexed into the vector store).\n")
 
@@ -287,13 +304,13 @@ def main() -> None:
     def before_fn(query: str, **filters) -> list[str]:
         return legacy_retrieve(
             user_id=user_id, query=query, top_k=args.top_k, db_path=args.db_path,
-            qdrant_path=args.qdrant_path, embedding_model=rag.DEFAULT_EMBEDDING_MODEL, **filters,
+            chroma_path=args.chroma_path, embedding_model=rag.DEFAULT_EMBEDDING_MODEL, **filters,
         )
 
     def after_fn(query: str, **filters) -> list[str]:
         result = rag.retrieve(
             user_id=user_id, query=query, top_k=args.top_k, db_path=args.db_path,
-            qdrant_path=args.qdrant_path, enable_query_rewrite=args.with_query_rewrite,
+            chroma_path=args.chroma_path, enable_query_rewrite=args.with_query_rewrite,
             enable_rerank=not args.no_rerank, **filters,
         )
         return [e.source_id for e in result.evidence]

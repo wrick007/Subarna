@@ -49,7 +49,7 @@ def _clear_rag_caches():
 
 
 # ---------------------------------------------------------------------------
-# _get_embedder / _get_qdrant_client: process-lifetime singleton caching
+# _get_embedder / _get_chroma_client: process-lifetime singleton caching
 # ---------------------------------------------------------------------------
 
 
@@ -110,14 +110,14 @@ def test_get_embedder_clear_cache_forces_a_fresh_attempt(monkeypatch):
     assert construct_count["n"] == 2
 
 
-def test_get_qdrant_client_is_cached_per_path_not_globally(tmp_path):
-    pytest.importorskip("qdrant_client")
-    path_a = str(tmp_path / "qdrant_a")
-    path_b = str(tmp_path / "qdrant_b")
+def test_get_chroma_client_is_cached_per_path_not_globally(tmp_path):
+    pytest.importorskip("chromadb")
+    path_a = str(tmp_path / "chroma_a")
+    path_b = str(tmp_path / "chroma_b")
 
-    client_a1 = rag._get_qdrant_client(path_a)
-    client_a2 = rag._get_qdrant_client(path_a)
-    client_b = rag._get_qdrant_client(path_b)
+    client_a1 = rag._get_chroma_client(path_a)
+    client_a2 = rag._get_chroma_client(path_a)
+    client_b = rag._get_chroma_client(path_b)
 
     assert client_a1 is not None
     assert client_a1 is client_a2  # same path -> cache hit, same instance

@@ -1,5 +1,5 @@
 # See README.md "Deployment -> Option B" for build/run instructions and
-# the persistent-volume note (data/finmate.db + data/qdrant_store are
+# the persistent-volume note (data/finmate.db + data/chroma_store are
 # plain files on disk -- mount a volume at /app/data or they won't
 # survive a container restart/redeploy).
 FROM python:3.12-slim

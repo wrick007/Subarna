@@ -52,21 +52,21 @@ async def lifespan(app: FastAPI):
 
     if config.WARM_UP_ON_STARTUP:
         # See finmate/rag.py:warm_up's docstring -- pays the "load the
-        # embedder/(optionally cross-encoder)/Qdrant client" cost once,
+        # embedder/(optionally cross-encoder)/Chroma client" cost once,
         # now, instead of on whichever user's chat message happens to
         # arrive first. warm_cross_encoder is explicit here (not left to
         # warm_up's own env-var default) purely so this line is the one
         # place a reader sees "the backend's warm-up behavior for
         # reranking is config.ENABLE_RERANKER" -- functionally identical
         # either way, since both read the same ENABLE_RERANKER var.
-        app.state.warm_up_result = rag.warm_up(qdrant_path=config.QDRANT_PATH, warm_cross_encoder=config.ENABLE_RERANKER)
+        app.state.warm_up_result = rag.warm_up(chroma_path=config.CHROMA_PATH, warm_cross_encoder=config.ENABLE_RERANKER)
         logger.info("RAG warm-up: %s (reranker enabled: %s)", app.state.warm_up_result, config.ENABLE_RERANKER)
     else:
         app.state.warm_up_result = {}
 
     yield
     # --- Shutdown ----------------------------------------------------
-    rag.clear_cache()  # closes cached Qdrant client(s) cleanly; see its docstring
+    rag.clear_cache()  # closes cached Chroma client(s) cleanly; see its docstring
 
 
 app = FastAPI(

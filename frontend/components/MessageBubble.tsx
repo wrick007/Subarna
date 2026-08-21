@@ -14,7 +14,7 @@ function ThinkingIndicator() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="h-1.5 w-1.5 animate-bounce rounded-full bg-mist"
+          className="h-1.5 w-1.5 animate-bounce rounded-full bg-gold"
           style={{ animationDelay: `${i * 120}ms` }}
         />
       ))}
@@ -30,8 +30,16 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
       <div className={`flex max-w-[85%] flex-col sm:max-w-[75%] ${isUser ? "items-end" : "items-start"}`}>
         <div
           className={
+            // User bubbles get a warm gold *tint*, not a saturated gold
+            // fill -- see globals.css's token comment: gold is spent
+            // where the product does distinctive work (the thinking
+            // indicator and streaming cursor below, both literally the
+            // moment of live generation), not as base chrome for every
+            // message a person sends, which would both dilute what the
+            // color means and add more visual weight than a "minimal,
+            // low-noise" redesign should.
             isUser
-              ? "rounded-2xl rounded-tr-md bg-ledger px-4 py-2.5 text-[0.95rem] leading-relaxed text-white"
+              ? "rounded-2xl rounded-tr-md bg-gold-soft px-4 py-2.5 text-[0.95rem] leading-relaxed text-ink"
               : "rounded-2xl rounded-tl-md border border-border bg-surface px-4 py-2.5 text-[0.95rem] leading-relaxed text-ink"
           }
         >
@@ -47,6 +55,12 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
           ) : (
             <div className="prose-chat">
               <ReactMarkdown>{message.content}</ReactMarkdown>
+              {message.streaming && (
+                <span
+                  className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-gold align-text-bottom"
+                  aria-hidden="true"
+                />
+              )}
             </div>
           )}
         </div>

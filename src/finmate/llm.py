@@ -3,7 +3,10 @@ Shared LLM wrapper for FinMate AI -- built on the OpenAI Python SDK pointed
 at an OpenAI-*compatible* endpoint, so it works with free-tier providers
 that don't require a credit card: Groq or Google Gemini, out of the box.
 
-Every agent call in `finmate/agents/*.py` goes through `LLMClient.call`, so:
+Every agent call in `finmate/agents/*.py` goes through `LLMClient.call`
+(or, for the one call site that streams its output to the user in
+real time, `LLMClient.call_stream` -- see that method's docstring for
+how it differs), so:
   - the CONSTITUTION is prepended to every system prompt exactly once, here,
     never copy-pasted into individual agent modules (opt out per-call with
     `include_constitution=False` for the rare non-user-facing utility call
@@ -40,7 +43,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Optional, Type, TypeVar
+from typing import Iterator, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -206,6 +209,56 @@ class LLMClient:
                     f"LLM response failed schema validation twice for {response_model.__name__}. "
                     f"Last error: {second_error}. Last raw response: {raw_text_2!r}"
                 ) from second_error
+
+    def call_stream(
+        self,
+        agent_system_prompt: str,
+        user_message: str,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = 0.0,
+        include_constitution: bool = True,
+    ) -> Iterator[str]:
+        """Stream a raw-text response token-by-token, for Priority 2's
+        SSE streaming path (`orchestrator.run_finmate_stream`). Yields
+        each text delta as it arrives from the provider; join them for
+        the complete text, same as what `.call()` with
+        `response_model=None` would have returned.
+
+        Deliberately narrower than `.call()`:
+          - raw text only -- no `response_model`/JSON mode. A partial
+            JSON object isn't meaningfully renderable token-by-token the
+            way prose is, and every call site that wants streaming
+            (today: only agents/synthesis.py's `stream_synthesis_agent`,
+            the one call whose output the user actually reads token by
+            token) already wants raw text.
+          - no rate-limit retry (contrast `_create_with_retry`, which
+            `.call()` uses via `_raw_call`): a retry after some tokens
+            have already been yielded to a caller has no clean semantics
+            here -- the caller has already forwarded those tokens
+            downstream (e.g. as SSE events to a browser), so silently
+            restarting the underlying provider call would either
+            duplicate or discard visible output. A rate-limit error here
+            surfaces to the caller as a normal exception; the SSE
+            endpoint (`backend/app/routers/chat.py`) catches it and emits
+            an `error` event rather than leaving the connection hanging.
+          - no `response_format={"type": "json_object"}` fallback dance
+            that `_raw_call` does for JSON mode, for the same reason
+            (nothing here is ever JSON mode).
+        """
+        system_prompt = f"{CONSTITUTION}\n\n---\n\n{agent_system_prompt}" if include_constitution else agent_system_prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+        stream = self._client.chat.completions.create(
+            model=self.model, messages=messages, max_tokens=max_tokens, temperature=temperature, stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
     def _raw_call(
         self, system_prompt: str, user_message: str, max_tokens: int, temperature: float, json_mode: bool,

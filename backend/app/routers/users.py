@@ -75,13 +75,13 @@ def get_transactions(
 def delete_user(user_id: str) -> DeleteUserResponse:
     """"Forget this user's data": removes both the SQLite rows
     (`db.delete_user_data`, same call app.py's Streamlit sidebar button
-    makes) and, if one was ever built, this user's Qdrant vector
+    makes) and, if one was ever built, this user's Chroma vector
     collection (`rag.delete_user_vector_index`) -- deleting only the
     former and leaving the latter behind would be an incomplete "forget
     my data" in anything but name.
     """
     db.delete_user_data(user_id, db_path=config.DB_PATH)
-    rag.delete_user_vector_index(user_id, qdrant_path=config.QDRANT_PATH)
+    rag.delete_user_vector_index(user_id, chroma_path=config.CHROMA_PATH)
     return DeleteUserResponse(user_id=user_id, deleted=True)
 
 
@@ -104,7 +104,7 @@ def seed_demo_data() -> SeedDemoResponse:
     except ImportError as exc:  # pragma: no cover - repo layout invariant, not a runtime condition
         raise HTTPException(status_code=500, detail=f"Could not load the demo-data seeder: {exc}") from exc
 
-    result = seed(config.DB_PATH, build_vector_index=True, verbose=False, qdrant_path=config.QDRANT_PATH)
+    result = seed(config.DB_PATH, build_vector_index=True, verbose=False, chroma_path=config.CHROMA_PATH)
     return SeedDemoResponse(
         user_id=result.user_id,
         transactions_seeded=result.transactions_seeded,

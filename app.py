@@ -24,7 +24,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 from finmate import db, rag
-from finmate.casual import CASUAL_RESPONSE, is_casual_message
+from finmate.casual import is_casual_message, pick_casual_response
 from finmate.llm import LLMClient, LLMConfigError
 from finmate.orchestrator import run_finmate
 
@@ -285,15 +285,19 @@ if user_input:
             #   RAG
             #   Calculation
             #   Specialist
-            #   Synthesis
+            #   Synthesis (also does final-response formatting as of the
+            #              Priority-2 pipeline redesign -- see
+            #              finmate/orchestrator.py's module docstring
+            #              "Fewer sequential calls: synthesis + formatter
+            #              merged"; there's no separate Formatter stage
+            #              to list here anymore)
             #   Critic
-            #   Formatter
             #
             # =======================================================
 
             if is_casual_message(user_input):
 
-                response = CASUAL_RESPONSE
+                response = pick_casual_response()
 
                 st.markdown(response)
 
@@ -314,11 +318,24 @@ if user_input:
                     "Routing, retrieving evidence, calculating, and verifying..."
                 ):
 
+                    # Short-term conversational memory (see
+                    # finmate/orchestrator.py's module docstring
+                    # "Conversation history"): everything already in
+                    # this session except the user_input just appended
+                    # above, as plain {role, content} dicts -- drop the
+                    # "meta" key stored alongside assistant messages
+                    # here, which the orchestrator doesn't take.
+                    history = [
+                        {"role": m["role"], "content": m["content"]}
+                        for m in st.session_state[messages_key][:-1]
+                    ]
+
                     result = run_finmate(
                         user_id,
                         user_input,
                         llm_client,
                         db_path=DB_PATH,
+                        conversation_history=history,
                     )
 
                 # ---------------------------------------------------

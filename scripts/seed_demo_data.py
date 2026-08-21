@@ -43,7 +43,7 @@ class SeedResult:
 
 
 def seed(
-    db_path: str, build_vector_index: bool = True, verbose: bool = True, qdrant_path: str = rag.DEFAULT_QDRANT_PATH,
+    db_path: str, build_vector_index: bool = True, verbose: bool = True, chroma_path: str = rag.DEFAULT_CHROMA_PATH,
 ) -> SeedResult:
     """Load the synthetic demo profile + transactions into `db_path`
     for user_id "demo_user". Returns a `SeedResult` with real counts --
@@ -52,11 +52,11 @@ def seed(
     endpoint, so the API reports exactly what happened rather than
     inferring it after the fact from a before/after row-count diff.
 
-    `qdrant_path` matters whenever the caller isn't using the default
+    `chroma_path` matters whenever the caller isn't using the default
     on-disk location -- the backend, for instance, may have
-    `FINMATE_QDRANT_PATH` pointed elsewhere (see backend/app/config.py).
+    `FINMATE_CHROMA_PATH` pointed elsewhere (see backend/app/config.py).
     Passing it through to `rag.index_transactions_for_user` here (rather
-    than silently indexing at `rag.DEFAULT_QDRANT_PATH` regardless of
+    than silently indexing at `rag.DEFAULT_CHROMA_PATH` regardless of
     what the caller configured) is what makes the two agree on where the
     index actually lives -- otherwise seeding would appear to succeed
     while real retrieval, reading from the *configured* path, found
@@ -108,13 +108,13 @@ def seed(
 
     indexed = 0
     if build_vector_index:
-        indexed = rag.index_transactions_for_user(profile.user_id, transactions, db_path=db_path, qdrant_path=qdrant_path)
+        indexed = rag.index_transactions_for_user(profile.user_id, transactions, db_path=db_path, chroma_path=chroma_path)
         if verbose:
             if indexed:
                 print(f"Indexed {indexed} transactions into the vector store for semantic retrieval.")
             else:
                 print(
-                    "Skipped vector indexing (qdrant-client / sentence-transformers not installed, or "
+                    "Skipped vector indexing (chromadb / sentence-transformers not installed, or "
                     "already unavailable). Metadata-filtered retrieval still works fully -- see "
                     "finmate/rag.py's documented fallback."
                 )
@@ -132,7 +132,7 @@ def seed(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default=db.DEFAULT_DB_PATH)
-    parser.add_argument("--qdrant-path", default=rag.DEFAULT_QDRANT_PATH)
-    parser.add_argument("--no-vector-index", action="store_true", help="Skip building the Qdrant vector index.")
+    parser.add_argument("--chroma-path", default=rag.DEFAULT_CHROMA_PATH)
+    parser.add_argument("--no-vector-index", action="store_true", help="Skip building the Chroma vector index.")
     args = parser.parse_args()
-    seed(args.db_path, build_vector_index=not args.no_vector_index, qdrant_path=args.qdrant_path)
+    seed(args.db_path, build_vector_index=not args.no_vector_index, chroma_path=args.chroma_path)

@@ -22,7 +22,7 @@ Interactive API docs at [http://localhost:8000/docs](http://localhost:8000/docs)
 ```
 app/
   main.py           FastAPI app: CORS, startup warm-up, error handling, router registration
-  config.py         Environment-driven settings (DB/Qdrant paths, CORS origins, ...)
+  config.py         Environment-driven settings (DB/Chroma paths, CORS origins, ...)
   deps.py           Shared dependency: pulls the app-lifetime LLM client, or a clean 503
   api_schemas.py     Request/response models -- the API's actual wire contract (see its own docstring for why this is separate from finmate/schemas.py)
   routers/

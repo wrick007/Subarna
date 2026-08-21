@@ -14,14 +14,40 @@ and each router does the (thin) translation.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+class ChatMessageIn(BaseModel):
+    """One prior turn, as the frontend already has it in its own message
+    list (`frontend/components/ChatShell.tsx`'s `messages` state) --
+    this is the wire shape for `ChatRequest.history` below, not an
+    internal pipeline contract (compare `finmate/orchestrator.py`'s
+    plain-dict `GraphState["conversation_history"]`, which this gets
+    converted to in `routers/chat.py`)."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
 
 
 class ChatRequest(BaseModel):
     user_id: str = Field(..., min_length=1, max_length=200)
     message: str = Field(..., min_length=1, max_length=4000)
+    # Short-term conversational memory (see finmate/orchestrator.py's
+    # module docstring "Conversation history" -- distinct from the
+    # profile-fact memory finmate/agents/memory.py persists to SQLite).
+    # Oldest first, should NOT include `message` itself. Optional and
+    # defaults to empty so any existing caller of this API (an older
+    # frontend build, a direct API integration) keeps working exactly as
+    # before -- no history in, no history-aware behavior, same as today.
+    # max_length=60 is a generous outer guard against an abusive/buggy
+    # payload; the orchestrator applies the real, much smaller trim (see
+    # `finmate.orchestrator.MAX_HISTORY_MESSAGES`) regardless of how much
+    # is sent here, so a client doesn't need to match that number exactly
+    # -- see ChatShell.tsx, which sends a further-trimmed slice anyway to
+    # keep the request body small.
+    history: list[ChatMessageIn] = Field(default_factory=list, max_length=60)
 
 
 class EvidenceItemOut(BaseModel):
@@ -70,6 +96,16 @@ class ChatResponse(BaseModel):
     intent: str = ""
     risk_level: str = "low"
     critic_passed: bool = True
+    # True whenever the answer needed no numeric/financial-claim
+    # verification pass at all (see finmate/orchestrator.py's
+    # `_turn_needs_verification` and its "Critic: conditional, not
+    # always-on" module docstring section) -- distinct from
+    # `critic_passed`, which is also True in that case. A frontend
+    # showing a single "Verified" badge for both `verification_ran=False`
+    # (nothing to check) and `verification_ran=True, critic_passed=True`
+    # (checked and approved) would overstate the first case -- see
+    # frontend/components/VerifiedStrip.tsx.
+    verification_ran: bool = True
     critic_retries_used: int = 0
     critic_errors: list[str] = Field(default_factory=list)
     critic_unsupported_claims: list[str] = Field(default_factory=list)

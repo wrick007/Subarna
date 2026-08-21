@@ -1,19 +1,40 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { Settings, Wifi, WifiOff } from "lucide-react";
 
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { generateId } from "@/lib/format";
-import type { ChatMessage, HealthResponse, Transaction } from "@/lib/types";
+import type { ChatHistoryTurn, ChatMessage, HealthResponse, Transaction } from "@/lib/types";
 
+import AccountMenu from "./AccountMenu";
 import Composer from "./Composer";
 import MessageList from "./MessageList";
-import Sidebar from "./Sidebar";
 import StatusBanner from "./StatusBanner";
 
 const USER_ID_STORAGE_KEY = "finmate:user_id";
 const DEFAULT_USER_ID = "demo_user";
+
+// Short-term conversational memory (see finmate/orchestrator.py's module
+// docstring "Conversation history"): how many of the most recent
+// *settled* messages this client sends up with each turn. The backend
+// re-trims to a smaller number anyway (finmate.orchestrator.
+// MAX_HISTORY_MESSAGES) regardless of what's sent -- this cap exists to
+// keep the request body small, not because 20 is the "real" limit.
+const MAX_HISTORY_MESSAGES_SENT = 20;
+
+/** `messages` state -> the `history` the API wants: settled turns only
+ * (a still-`pending` reply has no content yet, and a failed one has
+ * none worth resending as context), oldest-first, most recent
+ * MAX_HISTORY_MESSAGES_SENT. Excludes whatever message is about to be
+ * sent as the *current* turn -- callers pass the state as it was before
+ * appending that one. */
+function historyForApi(messages: ChatMessage[]): ChatHistoryTurn[] {
+  return messages
+    .filter((m) => !m.pending && !m.error && m.content.trim().length > 0)
+    .slice(-MAX_HISTORY_MESSAGES_SENT)
+    .map((m) => ({ role: m.role, content: m.content }));
+}
 
 export default function ChatShell() {
   // Not persisted via localStorage inside artifacts (that API isn't
@@ -29,7 +50,7 @@ export default function ChatShell() {
   const [isSending, setIsSending] = useState(false);
   const [isSeedingDemo, setIsSeedingDemo] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   useEffect(() => {
     // A lazy useState(() => ...) initializer would avoid this effect
@@ -111,22 +132,57 @@ export default function ChatShell() {
         createdAt: Date.now(),
         pending: true,
       };
+      const history = historyForApi(messages);
       setMessages((prev) => [...prev, userMessage, pendingMessage]);
       setIsSending(true);
 
-      try {
-        const res = await api.chat(userId, text);
-        setMessages((prev) =>
-          prev.map((m) => (m.id === pendingId ? { ...m, pending: false, content: res.response, meta: res } : m)),
-        );
-      } catch (err) {
-        const message = err instanceof ApiError ? err.message : "Something went wrong. Please try again.";
-        setMessages((prev) => prev.map((m) => (m.id === pendingId ? { ...m, pending: false, error: message } : m)));
-      } finally {
-        setIsSending(false);
-      }
+      // Priority 2 streaming: token-by-token via SSE (see lib/api.ts's
+      // chatStream and finmate/orchestrator.py's module docstring
+      // "Streaming"). `accumulated` tracks the current attempt's text
+      // outside React state (state updates are async/batched; the next
+      // token's callback needs the *actual* current value, not a stale
+      // closure over `content` from the last render).
+      let accumulated = "";
+      await api.chatStream(userId, text, history, {
+        onToken: (delta) => {
+          accumulated += delta;
+          const streamedSoFar = accumulated;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === pendingId ? { ...m, pending: false, streaming: true, content: streamedSoFar } : m)),
+          );
+        },
+        onRestart: () => {
+          // See StreamEvent's docstring in orchestrator.py: a
+          // critic-triggered retry discards every token streamed so
+          // far. Go back to the thinking indicator rather than leave
+          // stale, superseded text on screen while the retry streams in.
+          accumulated = "";
+          setMessages((prev) =>
+            prev.map((m) => (m.id === pendingId ? { ...m, pending: true, streaming: false, content: "" } : m)),
+          );
+        },
+        onDone: (res) => {
+          // Use res.response, not `accumulated`, as the final text: on
+          // an exhausted-retry verification failure, the backend appends
+          // a disclaimer *after* streaming already finished (see
+          // orchestrator.py's _node_finalize) -- accumulated tokens
+          // alone would be missing it.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === pendingId ? { ...m, pending: false, streaming: false, content: res.response, meta: res } : m,
+            ),
+          );
+        },
+        onError: (message) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === pendingId ? { ...m, pending: false, streaming: false, error: message } : m)),
+          );
+        },
+      });
+
+      setIsSending(false);
     },
-    [userId],
+    [userId, messages],
   );
 
   const handleLoadDemoData = useCallback(async () => {
@@ -157,49 +213,52 @@ export default function ChatShell() {
   }, [userId]);
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-paper">
-      {sidebarOpen && (
-        <button
-          type="button"
-          aria-label="Close menu"
-          onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-30 bg-ink/30 sm:hidden"
-        />
-      )}
-      <div
-        className={`fixed inset-y-0 left-0 z-40 w-72 transform transition-transform duration-200 ease-out sm:static sm:z-auto sm:w-auto sm:translate-x-0 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <Sidebar
+    <div className="flex h-dvh w-full flex-col overflow-hidden bg-paper">
+      {/* Top bar -- replaces the pre-redesign always-visible Sidebar
+          entirely (see AccountMenu.tsx's docstring): one thin row,
+          present on every screen size, no separate mobile/desktop
+          layouts to keep in sync. This is the whole point of "closer to
+          ChatGPT's actual interaction pattern" from the redesign brief
+          -- minimal chrome, one thing on screen at a time, nothing
+          competing with the chat itself. */}
+      <header className="relative flex shrink-0 items-center justify-between border-b border-border px-4 py-3 sm:px-6">
+        <span className="font-display text-lg font-semibold tracking-tight text-ink">FinMate</span>
+
+        <div className="flex items-center gap-3">
+          <span title={health?.status === "ok" ? "Backend connected" : "Backend unreachable"}>
+            {health?.status === "ok" ? (
+              <Wifi className="h-4 w-4 text-mist" aria-hidden="true" />
+            ) : (
+              <WifiOff className="h-4 w-4 text-brick" aria-hidden="true" />
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => setAccountMenuOpen((v) => !v)}
+            aria-label="Account and data settings"
+            aria-expanded={accountMenuOpen}
+            className="rounded-lg p-1.5 text-ink-soft transition-colors hover:bg-gold-soft hover:text-gold-deep"
+          >
+            <Settings className="h-4.5 w-4.5" aria-hidden="true" />
+          </button>
+        </div>
+
+        <AccountMenu
+          open={accountMenuOpen}
+          onClose={() => setAccountMenuOpen(false)}
           userId={userId}
           onUserIdChange={setUserId}
           transactions={transactions}
-          health={health}
           onLoadDemoData={handleLoadDemoData}
           onForgetData={handleForgetData}
           isSeedingDemo={isSeedingDemo}
           isDeleting={isDeleting}
         />
-      </div>
+      </header>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-border px-4 py-3 sm:hidden">
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((v) => !v)}
-            aria-label={sidebarOpen ? "Close menu" : "Open menu"}
-            className="text-ink-soft"
-          >
-            {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-          <span className="font-display text-lg italic text-ledger-dark">FinMate</span>
-        </div>
-
-        <StatusBanner health={health} checked={healthChecked} />
-        <MessageList messages={messages} onSuggestionClick={handleSend} />
-        <Composer onSend={handleSend} disabled={isSending} />
-      </div>
+      <StatusBanner health={health} checked={healthChecked} />
+      <MessageList messages={messages} onSuggestionClick={handleSend} />
+      <Composer onSend={handleSend} disabled={isSending} />
     </div>
   );
 }

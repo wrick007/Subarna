@@ -19,9 +19,12 @@ export default function StatusBanner({ health, checked }: { health: HealthRespon
   }
 
   if (!health.llm_configured) {
+    // Deliberately a neutral/muted treatment, not gold: see globals.css's
+    // token comment -- gold means "verified"/"live" specifically, and a
+    // second, unrelated meaning for the same color would blur that.
     return (
-      <div className="flex items-start gap-2 border-b border-brass/25 bg-brass-soft px-4 py-2.5 text-sm text-brass sm:px-8">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <div className="flex items-start gap-2 border-b border-border bg-paper px-4 py-2.5 text-sm text-ink-soft sm:px-8">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-mist" aria-hidden="true" />
         <span>
           No LLM provider is configured on the backend, so real questions won&apos;t work yet (greetings still will).
           Set <code className="font-mono text-xs">GROQ_API_KEY</code> or{" "}

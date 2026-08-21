@@ -69,8 +69,8 @@ def test_seed_skips_vector_indexing_when_requested(tmp_path):
     assert result.vector_indexed == 0
 
 
-def test_seed_reports_vector_indexed_count_when_qdrant_available(tmp_path, monkeypatch):
-    pytest.importorskip("qdrant_client")
+def test_seed_reports_vector_indexed_count_when_chroma_available(tmp_path, monkeypatch):
+    pytest.importorskip("chromadb")
     from finmate import rag
 
     class _FakeArray(list):
@@ -87,13 +87,14 @@ def test_seed_reports_vector_indexed_count_when_qdrant_available(tmp_path, monke
     monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
 
     db_path = str(tmp_path / "test.db")
-    qdrant_path = str(tmp_path / "qdrant")
+    chroma_path = str(tmp_path / "chroma")
 
-    result = seed(db_path, build_vector_index=True, verbose=False, qdrant_path=qdrant_path)
+    result = seed(db_path, build_vector_index=True, verbose=False, chroma_path=chroma_path)
     assert result.vector_indexed == result.transactions_seeded
 
-    # And -- the actual point of threading qdrant_path through seed() at
+    # And -- the actual point of threading chroma_path through seed() at
     # all -- the index really did land at the path we asked for, not at
-    # rag.DEFAULT_QDRANT_PATH regardless of what was requested.
-    client = rag._get_qdrant_client(qdrant_path)
-    assert client.collection_exists(f"{rag.COLLECTION_PREFIX}demo_user") is True
+    # rag.DEFAULT_CHROMA_PATH regardless of what was requested.
+    client = rag._get_chroma_client(chroma_path)
+    collection_names = {c.name for c in client.list_collections()}
+    assert f"{rag.COLLECTION_PREFIX}demo_user" in collection_names

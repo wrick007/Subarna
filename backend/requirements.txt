@@ -1,5 +1,5 @@
 # Additive to the root requirements.txt (the finmate engine's own
-# dependencies -- openai, langgraph, qdrant-client, sentence-transformers,
+# dependencies -- openai, langgraph, chromadb, sentence-transformers,
 # etc.). Installed together: see backend/Dockerfile, or for local dev:
 #
 #   pip install -r requirements.txt -r backend/requirements.txt

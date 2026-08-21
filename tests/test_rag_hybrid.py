@@ -2,8 +2,8 @@
 Integration tests for the rewritten finmate.rag.retrieve() hybrid
 pipeline: stage toggles, the fallback-ladder `stage`/`note` reporting,
 query-rewrite -> keyword-search integration (mocked LLM), rerank
-integration (mocked cross-encoder), and the Qdrant candidate-set-scoping
-fix (skipped automatically where qdrant-client isn't installed).
+integration (mocked cross-encoder), and the Chroma candidate-set-scoping
+fix (skipped automatically where chromadb isn't installed).
 
 tests/test_rag.py already covers the pre-existing metadata-filter/
 recency-floor behavior and is left as-is (still passing unchanged, see
@@ -11,12 +11,12 @@ README) -- this file focuses on what's new: the keyword/fusion/rerank/
 query-rewrite stages and how they compose.
 
 Every test here runs with zero network access. Tests that build a real
-(embedded, on-disk) Qdrant index use a fake, dependency-free embedder
+(embedded, on-disk) Chroma index use a fake, dependency-free embedder
 (see `_ConstantFakeEmbedder` below) rather than downloading a real model
 -- this sandbox's build environment could not reach Hugging Face Hub to
 download `all-MiniLM-L6-v2` (verified; see README "Deviations"), and
-these tests must be able to run anywhere `qdrant-client` is installed,
-not only where a model download would additionally succeed.
+these tests must be able to run anywhere `chromadb` is installed, not
+only where a model download would additionally succeed.
 """
 
 from __future__ import annotations
@@ -305,14 +305,14 @@ def test_rerank_turns_on_via_enable_reranker_env_var(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Dense vector search (stage 4) -- real embedded Qdrant, fake embeddings
+# Dense vector search (stage 4) -- real embedded Chroma, fake embeddings
 # ---------------------------------------------------------------------------
 
 
 class _FakeArray(list):
     """Minimal stand-in for a numpy array: only implements what
     finmate/rag.py actually calls (`.tolist()`), so these tests exercise
-    real Qdrant wiring without needing numpy or a real model."""
+    real Chroma wiring without needing numpy or a real model."""
 
     def tolist(self):
         return [x.tolist() if isinstance(x, _FakeArray) else x for x in self]
@@ -320,10 +320,11 @@ class _FakeArray(list):
 
 class _ConstantFakeEmbedder:
     """Every text embeds to the same fixed vector. These tests are about
-    finmate.rag's Qdrant *wiring* (the query_points()/payload-filter fix
-    -- see README "Deviations"), not about semantic ranking quality,
-    which needs a real downloaded model this build's sandbox couldn't
-    reach (see README)."""
+    finmate.rag's Chroma *wiring* (the collection.query()/where-filter
+    scoping, and the cosine-distance-to-similarity conversion -- see
+    README "Deviations" and rag.py's module docstring "ChromaDB
+    migration"), not about semantic ranking quality, which needs a real
+    downloaded model this build's sandbox couldn't reach (see README)."""
 
     _DIM = 3
 
@@ -335,9 +336,9 @@ class _ConstantFakeEmbedder:
 
 
 def test_vector_search_never_returns_a_transaction_outside_the_candidate_set(tmp_path, monkeypatch):
-    pytest.importorskip("qdrant_client")
+    pytest.importorskip("chromadb")
     db_path = str(tmp_path / "test.db")
-    qdrant_path = str(tmp_path / "qdrant")
+    chroma_path = str(tmp_path / "chroma")
     txs = [
         Transaction(user_id="u1", date="2026-06-01", description="Rent payment",
                     amount=-32000, category="Rent", source_id="in_filter"),
@@ -346,12 +347,12 @@ def test_vector_search_never_returns_a_transaction_outside_the_candidate_set(tmp
     ]
     _seed(db_path, txs)
     monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
-    indexed = rag.index_transactions_for_user("u1", txs, db_path=db_path, qdrant_path=qdrant_path)
+    indexed = rag.index_transactions_for_user("u1", txs, db_path=db_path, chroma_path=chroma_path)
     assert indexed == 2
 
     result = rag.retrieve(
         "u1", query="rent", start_date="2026-06-01", end_date="2026-06-30",
-        db_path=db_path, qdrant_path=qdrant_path,
+        db_path=db_path, chroma_path=chroma_path,
         enable_keyword_search=False, enable_rerank=False, enable_query_rewrite=False,
     )
     ids = {e.source_id for e in result.evidence}
@@ -365,12 +366,14 @@ def test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit(tmp_path
     only `limit` globally-ranked hits and filtering to the candidate set
     *after* the fact could miss a relevant item whenever enough
     out-of-candidate-set transactions score at least as high globally.
-    Scoping the filter into the Qdrant query itself doesn't have that
-    blind spot -- proven here with `limit=1`, deliberately smaller than
-    the 5 identically-scored, out-of-candidate-set "noise" points."""
-    pytest.importorskip("qdrant_client")
+    Scoping the filter into the Chroma query itself (a `where` clause,
+    carried over from the original Qdrant payload-filter fix during the
+    ChromaDB migration -- see rag.py's module docstring) doesn't have
+    that blind spot -- proven here with `limit=1`, deliberately smaller
+    than the 5 identically-scored, out-of-candidate-set "noise" points."""
+    pytest.importorskip("chromadb")
     db_path = str(tmp_path / "test.db")
-    qdrant_path = str(tmp_path / "qdrant")
+    chroma_path = str(tmp_path / "chroma")
     noise = [
         Transaction(user_id="u1", date="2026-06-01", description="Rent noise", amount=-1,
                     category="Other", source_id=f"noise_{i}")
@@ -381,20 +384,47 @@ def test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit(tmp_path
     all_txs = [*noise, target]
     _seed(db_path, all_txs)
     monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
-    rag.index_transactions_for_user("u1", all_txs, db_path=db_path, qdrant_path=qdrant_path)
+    rag.index_transactions_for_user("u1", all_txs, db_path=db_path, chroma_path=chroma_path)
 
     ranked_ids, _scores = rag._vector_search(
         user_id="u1", query="rent", candidate_ids={"target"},
-        qdrant_path=qdrant_path, embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=1,
+        chroma_path=chroma_path, embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=1,
     )
     assert ranked_ids == ["target"]
+
+
+def test_vector_search_score_is_similarity_not_raw_chroma_distance(tmp_path, monkeypatch):
+    """Chroma's collection.query() returns cosine *distance* (lower =
+    more relevant); this module must convert it back to a similarity
+    (higher = more relevant, `1 - distance`) before returning it as
+    `vector_score`, so "higher is better" holds exactly as it did with
+    Qdrant's `point.score` pre-migration -- see rag.py's module
+    docstring "ChromaDB migration"."""
+    pytest.importorskip("chromadb")
+    db_path = str(tmp_path / "test.db")
+    chroma_path = str(tmp_path / "chroma")
+    txs = [Transaction(user_id="u1", date="2026-06-01", description="Rent payment",
+                        amount=-32000, category="Rent", source_id="tx_1")]
+    _seed(db_path, txs)
+    monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
+    rag.index_transactions_for_user("u1", txs, db_path=db_path, chroma_path=chroma_path)
+
+    # _ConstantFakeEmbedder always returns [1.0, 0.0, 0.0] -- an
+    # identical query vector against an identical indexed vector means
+    # cosine distance 0.0, i.e. similarity 1.0 (verified against a real
+    # embedded Chroma index during this migration).
+    _ranked_ids, scores = rag._vector_search(
+        user_id="u1", query="rent", candidate_ids={"tx_1"},
+        chroma_path=chroma_path, embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
+    )
+    assert scores["tx_1"] == pytest.approx(1.0)
 
 
 def test_vector_search_returns_empty_when_embedder_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: None)
     ranked_ids, scores = rag._vector_search(
         user_id="u1", query="rent", candidate_ids={"a"},
-        qdrant_path=str(tmp_path / "unused"), embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
+        chroma_path=str(tmp_path / "unused"), embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
     )
     assert ranked_ids == []
     assert scores == {}
@@ -403,7 +433,23 @@ def test_vector_search_returns_empty_when_embedder_unavailable(tmp_path, monkeyp
 def test_vector_search_returns_empty_for_empty_candidate_set(tmp_path):
     ranked_ids, scores = rag._vector_search(
         user_id="u1", query="rent", candidate_ids=set(),
-        qdrant_path=str(tmp_path / "unused"), embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
+        chroma_path=str(tmp_path / "unused"), embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
+    )
+    assert ranked_ids == []
+    assert scores == {}
+
+
+def test_vector_search_returns_empty_when_collection_does_not_exist_yet(tmp_path, monkeypatch):
+    """A user with no indexed transactions yet must degrade to "no
+    results", not raise -- Chroma's `get_collection` raises
+    `NotFoundError` for a missing collection (confirmed against a real
+    embedded index during this migration), which `_vector_search` must
+    catch rather than let propagate."""
+    pytest.importorskip("chromadb")
+    monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
+    ranked_ids, scores = rag._vector_search(
+        user_id="brand_new_user_never_indexed", query="rent", candidate_ids={"a"},
+        chroma_path=str(tmp_path / "chroma"), embedding_model=rag.DEFAULT_EMBEDDING_MODEL, limit=10,
     )
     assert ranked_ids == []
     assert scores == {}
@@ -417,30 +463,32 @@ def test_vector_search_returns_empty_for_empty_candidate_set(tmp_path):
 
 
 def test_delete_user_vector_index_removes_a_real_collection(tmp_path, monkeypatch):
-    pytest.importorskip("qdrant_client")
+    pytest.importorskip("chromadb")
     db_path = str(tmp_path / "test.db")
-    qdrant_path = str(tmp_path / "qdrant")
+    chroma_path = str(tmp_path / "chroma")
     txs = [
         Transaction(user_id="u1", date="2026-06-01", description="Rent payment",
                     amount=-32000, category="Rent", source_id="tx_1"),
     ]
     _seed(db_path, txs)
     monkeypatch.setattr(rag, "_get_embedder", lambda model_name=rag.DEFAULT_EMBEDDING_MODEL: _ConstantFakeEmbedder())
-    rag.index_transactions_for_user("u1", txs, db_path=db_path, qdrant_path=qdrant_path)
+    rag.index_transactions_for_user("u1", txs, db_path=db_path, chroma_path=chroma_path)
 
-    client = rag._get_qdrant_client(qdrant_path)
-    assert client.collection_exists(f"{rag.COLLECTION_PREFIX}u1") is True
+    client = rag._get_chroma_client(chroma_path)
+    collection_names = {c.name for c in client.list_collections()}
+    assert f"{rag.COLLECTION_PREFIX}u1" in collection_names
 
-    deleted = rag.delete_user_vector_index("u1", qdrant_path=qdrant_path)
+    deleted = rag.delete_user_vector_index("u1", chroma_path=chroma_path)
     assert deleted is True
-    assert client.collection_exists(f"{rag.COLLECTION_PREFIX}u1") is False
+    collection_names = {c.name for c in client.list_collections()}
+    assert f"{rag.COLLECTION_PREFIX}u1" not in collection_names
 
     # A user who never had a collection (or calling it twice) is a no-op,
     # not an error -- "already forgotten" is a success state, not a failure.
-    assert rag.delete_user_vector_index("u1", qdrant_path=qdrant_path) is False
-    assert rag.delete_user_vector_index("someone_else_entirely", qdrant_path=qdrant_path) is False
+    assert rag.delete_user_vector_index("u1", chroma_path=chroma_path) is False
+    assert rag.delete_user_vector_index("someone_else_entirely", chroma_path=chroma_path) is False
 
 
 def test_delete_user_vector_index_returns_false_when_client_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(rag, "_get_qdrant_client", lambda path=rag.DEFAULT_QDRANT_PATH: None)
-    assert rag.delete_user_vector_index("u1", qdrant_path=str(tmp_path / "unused")) is False
+    monkeypatch.setattr(rag, "_get_chroma_client", lambda path=rag.DEFAULT_CHROMA_PATH: None)
+    assert rag.delete_user_vector_index("u1", chroma_path=str(tmp_path / "unused")) is False

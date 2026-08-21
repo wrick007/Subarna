@@ -118,6 +118,19 @@ class RouterOutput(BaseModel):
     action_required: bool = False
     confirmation_required: bool = False
     risk_level: Literal["low", "medium", "high"] = "low"
+    # --- Priority 2 call-reduction: folded in from what used to be a
+    # separate finmate/query_rewrite.py LLM call (see that module and
+    # finmate/rag.py's stage-2 docstring). 0-3 short search-oriented
+    # phrasings of the user's message (e.g. "food expenses" ->
+    # "dining", "groceries"), speculative and harmless to produce even
+    # on turns that never reach RAG -- it's the same router call either
+    # way, not an extra one. finmate/rag.py:_retrieve_impl uses these
+    # directly when present instead of making its own query-rewrite
+    # call; a caller that bypasses the router (a test, scripts/eval_rag.py,
+    # any direct rag.retrieve() call) simply never populates this, and
+    # rag.py falls back to calling finmate.query_rewrite itself exactly
+    # as before -- see rag.py's "precomputed_phrasings" parameter.
+    search_phrasings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

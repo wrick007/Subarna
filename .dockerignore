@@ -9,6 +9,6 @@ venv/
 # Local databases/vector store shouldn't be baked into the image -- mount
 # a volume at /app/data instead (see README "Deployment").
 data/finmate.db
-data/qdrant_store/
+data/chroma_store/
 data/eval_finmate.db
-data/eval_qdrant_store/
+data/eval_chroma_store/

@@ -21,12 +21,14 @@ code, since every later stage searches *within* its output):
      metadata-filtered candidates -- SQLite FTS5, falling back to
      rank_bm25, falling back to substring scoring, whichever is
      available (probed at runtime).
-  4. Dense vector search (Qdrant + sentence-transformers, reused from the
-     pre-upgrade implementation) -- scoped to the metadata-filtered
-     candidate set via a Qdrant payload filter rather than fetching a
-     fixed number of globally-ranked hits and filtering to the candidate
-     set in Python afterward (see "Deviations" in the README for why
-     that could silently miss a relevant item).
+  4. Dense vector search (ChromaDB + sentence-transformers; migrated
+     from an earlier Qdrant-based implementation -- same architecture,
+     same embedding model, different storage/search library, see
+     "ChromaDB migration" below) -- scoped to the metadata-filtered
+     candidate set via a Chroma `where` metadata filter rather than
+     fetching a fixed number of globally-ranked hits and filtering to
+     the candidate set in Python afterward (see "Deviations" in the
+     README for why that could silently miss a relevant item).
   5. Fusion (finmate/reranker.py:reciprocal_rank_fusion) -- Reciprocal
      Rank Fusion of the keyword and vector rankings; never a raw score
      blend, since the two scores live on incompatible scales.
@@ -57,10 +59,10 @@ than raising. `RetrievalResult.vector_search_used` / `.note` are kept
 
 Performance (speed + token cost, same providers, same ranking output):
 
-  - Model/client singletons. `_get_embedder`, `_get_qdrant_client` (here)
+  - Model/client singletons. `_get_embedder`, `_get_chroma_client` (here)
     and `reranker._get_cross_encoder` are cached per model_name/path for
     the process lifetime, including a *failed* load. Loading model
-    weights (or reconnecting an embedded Qdrant client) is by far the
+    weights (or reconstructing a Chroma client) is by far the
     slowest thing in this pipeline; the pre-upgrade code paid that cost
     on every single retrieval call. A long-lived server process now pays
     it once. See each function's docstring and `clear_cache()`.
@@ -94,6 +96,43 @@ Performance (speed + token cost, same providers, same ranking output):
     `keyword_score`/`vector_score`/`rerank_score`/`retrieval_stage` stay
     on `RetrievalResult`/`EvidenceItem` for the API/UI, just not in the
     tokens billed to Groq/Gemini.
+
+ChromaDB migration (Priority 3):
+
+  Storage/search library only -- the architecture's shape is unchanged:
+  still a local, file-backed, embedded vector index (`chromadb.
+  PersistentClient(path=...)`, same as `QdrantClient(path=...)` before
+  it), still one collection per user (`COLLECTION_PREFIX + user_id`),
+  still populated and queried with embeddings this module computes
+  itself via `_get_embedder` (`collection.upsert(embeddings=...)`,
+  `collection.query(query_embeddings=...)`) rather than Chroma's own
+  default embedding function -- so retrieval behavior/quality is
+  isolated from "which library stores and searches the vectors."
+
+  Two details that needed care, not a mechanical rename, to actually
+  preserve that:
+
+  - Distance metric. Qdrant's collection was created with
+    `Distance.COSINE` explicitly. Chroma's default is L2 (squared
+    Euclidean), not cosine -- silently keeping Chroma's default would
+    have changed *ranking*, not just storage. Every collection here is
+    now created with `metadata={"hnsw:space": "cosine"}` to match.
+  - Score direction. Qdrant's `point.score` for a COSINE collection is a
+    similarity (higher = more relevant). Chroma's `query()` returns
+    *distances* (lower = more relevant) even on a cosine collection --
+    `distance = 1 - similarity`. `_vector_search` below converts back
+    (`similarity = 1 - distance`) before storing into `vector_score`, so
+    "higher `vector_score` is better" still holds exactly as before for
+    every downstream reader (the API/UI, and
+    `reranker.reciprocal_rank_fusion`'s scores param) -- only the
+    *ordering* Chroma already returns results in (nearest-first) was
+    reused as-is for `ranked_ids`, since that direction needs no
+    conversion.
+
+  Env var: `FINMATE_QDRANT_PATH` -> `FINMATE_CHROMA_PATH` (see
+  `backend/app/config.py`) -- grep the repo for "QDRANT"/"qdrant" if
+  migrating a deployment that still sets the old name, and set the new
+  one instead.
 """
 
 from __future__ import annotations
@@ -112,7 +151,7 @@ from .schemas import EvidenceItem, Transaction
 
 logger = logging.getLogger("finmate.rag")
 
-DEFAULT_QDRANT_PATH = "data/qdrant_store"
+DEFAULT_CHROMA_PATH = "data/chroma_store"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 COLLECTION_PREFIX = "finmate_tx_"
 DEFAULT_CROSS_ENCODER_MODEL = reranker.DEFAULT_CROSS_ENCODER_MODEL
@@ -124,27 +163,28 @@ DEFAULT_CROSS_ENCODER_MODEL = reranker.DEFAULT_CROSS_ENCODER_MODEL
 # roughly linear in this number.
 DEFAULT_RERANK_POOL = 30
 
-# How many hits to request from Qdrant per query before candidate-set
-# filtering narrows them. Kept well above top_k so the payload filter
-# (scoped to the metadata-filtered candidate set) still has enough raw
-# hits to work with.
+# How many hits to request from Chroma per query before candidate-set
+# filtering narrows them. Kept well above top_k so the metadata `where`
+# filter (scoped to the metadata-filtered candidate set) still has
+# enough raw hits to work with.
 DEFAULT_VECTOR_FETCH_LIMIT = 50
 
 # Upper bound on how long retrieve() will wait on the background vector
 # search before giving up on it for this call (see "Performance" above).
-# Generous for a local embedded-Qdrant + small local embedding model --
-# this exists to bound worst-case latency if something is badly wrong,
-# not because that path is normally anywhere close to this slow.
+# Generous for a local embedded Chroma index + small local embedding
+# model -- this exists to bound worst-case latency if something is
+# badly wrong, not because that path is normally anywhere close to this
+# slow.
 VECTOR_SEARCH_TIMEOUT_SECONDS = 15.0
 
 # --- process-lifetime singleton caches (see module docstring "Performance") ---
 # Each maps its key (model_name, or on-disk path) to the loaded object,
 # or to None for "already tried, unavailable" -- see _get_embedder /
-# _get_qdrant_client docstrings.
+# _get_chroma_client docstrings.
 _embedder_cache: dict[str, object] = {}
 _embedder_lock = threading.Lock()
-_qdrant_client_cache: dict[str, object] = {}
-_qdrant_client_lock = threading.Lock()
+_chroma_client_cache: dict[str, object] = {}
+_chroma_client_lock = threading.Lock()
 
 # Shared across every retrieve() call in this process. Submitting a task
 # to an existing pool is cheap; creating/tearing down a new
@@ -156,8 +196,8 @@ _qdrant_client_lock = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="finmate-rag")
 
 
-def delete_user_vector_index(user_id: str, qdrant_path: str = DEFAULT_QDRANT_PATH) -> bool:
-    """Drop this user's entire Qdrant collection (`{COLLECTION_PREFIX}{user_id}`),
+def delete_user_vector_index(user_id: str, chroma_path: str = DEFAULT_CHROMA_PATH) -> bool:
+    """Drop this user's entire Chroma collection (`{COLLECTION_PREFIX}{user_id}`),
     if one exists. The data-deletion counterpart to `index_transactions_for_user`:
     `finmate.db.delete_user_data` only ever touched SQLite, so calling
     just that (as this module's very first version did -- see
@@ -165,16 +205,18 @@ def delete_user_vector_index(user_id: str, qdrant_path: str = DEFAULT_QDRANT_PAT
     left an orphaned vector collection behind under that same user_id.
     Never raises: a missing client/collection is treated as "nothing to
     delete", same as every other `_get_*`-backed function in this
-    module.
+    module. Chroma raises `NotFoundError` from both `get_collection` and
+    `delete_collection` on a missing collection (confirmed against a real
+    embedded index, not assumed) -- caught below, same as any other
+    "nothing to delete" case.
     """
-    client = _get_qdrant_client(qdrant_path)
+    client = _get_chroma_client(chroma_path)
     if client is None:
         return False
     collection = f"{COLLECTION_PREFIX}{user_id}"
     try:
-        if not client.collection_exists(collection):
-            return False
-        client.delete_collection(collection_name=collection)
+        client.get_collection(name=collection)  # raises if it doesn't exist
+        client.delete_collection(name=collection)
         return True
     except Exception as exc:  # noqa: BLE001 -- deletion failing must degrade, never crash the caller
         logger.info("Could not delete vector collection for %s (%s).", user_id, exc)
@@ -184,7 +226,7 @@ def delete_user_vector_index(user_id: str, qdrant_path: str = DEFAULT_QDRANT_PAT
 def warm_up(
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     cross_encoder_model: str = DEFAULT_CROSS_ENCODER_MODEL,
-    qdrant_path: str = DEFAULT_QDRANT_PATH,
+    chroma_path: str = DEFAULT_CHROMA_PATH,
     warm_cross_encoder: Optional[bool] = None,
 ) -> dict[str, bool]:
     """Pre-load every cacheable model/client this module and `reranker`
@@ -217,7 +259,7 @@ def warm_up(
     it at query time.
 
     Returns which pieces actually became available, e.g.
-    `{"embedder": True, "qdrant_client": True, "cross_encoder": False}`.
+    `{"embedder": True, "chroma_client": True, "cross_encoder": False}`.
     `cross_encoder` is `False` (not attempted, not unavailable -- this
     function doesn't distinguish the two in its return value) whenever
     `warm_cross_encoder` resolves to False.
@@ -228,27 +270,27 @@ def warm_up(
     )
     return {
         "embedder": _get_embedder(embedding_model) is not None,
-        "qdrant_client": _get_qdrant_client(qdrant_path) is not None,
+        "chroma_client": _get_chroma_client(chroma_path) is not None,
         "cross_encoder": want_cross_encoder and reranker._get_cross_encoder(cross_encoder_model) is not None,
     }
 
 
 def clear_cache() -> None:
     """Test hook / operational escape hatch: forget cached embedder and
-    Qdrant client instances (including cached load failures), so the
+    Chroma client instances (including cached load failures), so the
     next call attempts a fresh load. See module docstring "Performance".
     Does not affect `reranker`'s cross-encoder cache or
     `query_rewrite`'s rewrite cache -- see `reranker.clear_cache()` and
     `query_rewrite.clear_cache()` for those."""
     with _embedder_lock:
         _embedder_cache.clear()
-    with _qdrant_client_lock:
-        for client in _qdrant_client_cache.values():
-            _close_qdrant_client(client)
-        _qdrant_client_cache.clear()
+    with _chroma_client_lock:
+        for client in _chroma_client_cache.values():
+            _close_chroma_client(client)
+        _chroma_client_cache.clear()
 
 
-def _close_qdrant_client(client: object) -> None:
+def _close_chroma_client(client: object) -> None:
     if client is None:
         return
     try:
@@ -258,18 +300,22 @@ def _close_qdrant_client(client: object) -> None:
 
 
 @atexit.register
-def _close_all_cached_qdrant_clients_at_exit() -> None:
-    """Embedded-mode QdrantClient holds an on-disk lock and its own
-    __del__ tries to release it -- harmless, but by the time the
-    interpreter is tearing down module globals that can fire after
-    `sys.meta_path` is already cleared, which prints a scary-looking (but
-    functionally inert) "Exception ignored" traceback. Closing every
-    cached client explicitly here, while the interpreter is still fully
-    intact, avoids that -- worth doing now that clients are long-lived
-    singletons instead of the pre-upgrade one-per-call instances, which
-    were typically already gone (refcounted away) long before shutdown."""
-    for client in _qdrant_client_cache.values():
-        _close_qdrant_client(client)
+def _close_all_cached_chroma_clients_at_exit() -> None:
+    """Belt-and-suspenders cleanup of every cached client at interpreter
+    shutdown, while it's still fully intact -- kept from the pre-migration
+    Qdrant version of this function even though empirical testing during
+    this migration showed Chroma's `PersistentClient` doesn't hold the
+    same kind of exclusive on-disk lock Qdrant's embedded mode did (see
+    module docstring "ChromaDB migration" -- multiple clients at the same
+    path work fine with Chroma). Still worth doing explicitly: these are
+    long-lived process-lifetime singletons now (see module docstring
+    "Performance"), not the pre-upgrade one-per-call instances that were
+    typically already gone (refcounted away) long before shutdown, so an
+    explicit close is cheap insurance against whatever cleanup a given
+    chromadb version's `__del__` does.
+    """
+    for client in _chroma_client_cache.values():
+        _close_chroma_client(client)
 
 
 @dataclass
@@ -354,110 +400,140 @@ def _get_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL):
         return embedder
 
 
-def _get_qdrant_client(path: str = DEFAULT_QDRANT_PATH):
-    """Lazily import + instantiate QdrantClient in embedded/on-disk mode.
-    Returns None -- never raises -- if the package isn't installed or
-    instantiation fails.
+def _get_chroma_client(path: str = DEFAULT_CHROMA_PATH):
+    """Lazily import + instantiate a ChromaDB PersistentClient in
+    embedded/on-disk mode. Returns None -- never raises -- if the
+    package isn't installed or instantiation fails.
 
     Cached per `path` for the process lifetime -- see module docstring
-    "Performance". This is not just a speed optimization: embedded-mode
-    Qdrant only allows one open client per on-disk path, so repeatedly
-    constructing a fresh, never-explicitly-closed client against the
-    same path on every call (the pre-upgrade behavior) relied on
-    CPython's reference-counting GC collecting the previous instance
-    before the next one opened -- reusing a single cached client removes
-    that fragility along with the repeated open/lock overhead.
+    "Performance". Unlike the pre-migration Qdrant version of this
+    function, this is *purely* a speed optimization, not also a
+    correctness requirement: confirmed empirically against a real
+    embedded Chroma index during this migration that (unlike embedded-mode
+    Qdrant) `chromadb.PersistentClient` does NOT enforce one open client
+    per on-disk path -- opening a second one at the same path works
+    fine. Still cached, because constructing a fresh client on every
+    single retrieval call would still mean redundant setup work for no
+    benefit, exactly like re-loading the embedder on every call would.
     """
-    if path in _qdrant_client_cache:
-        return _qdrant_client_cache[path]
-    with _qdrant_client_lock:
-        if path in _qdrant_client_cache:
-            return _qdrant_client_cache[path]
+    if path in _chroma_client_cache:
+        return _chroma_client_cache[path]
+    with _chroma_client_lock:
+        if path in _chroma_client_cache:
+            return _chroma_client_cache[path]
         try:
-            from qdrant_client import QdrantClient  # noqa: PLC0415
+            import chromadb  # noqa: PLC0415
         except ImportError:
-            _qdrant_client_cache[path] = None
+            _chroma_client_cache[path] = None
             return None
         try:
-            client = QdrantClient(path=path)
+            client = chromadb.PersistentClient(path=path)
         except Exception as exc:  # noqa: BLE001
-            logger.info("Qdrant client unavailable (%s); falling back.", exc)
+            logger.info("Chroma client unavailable (%s); falling back.", exc)
             client = None
-        _qdrant_client_cache[path] = client
+        _chroma_client_cache[path] = client
         return client
+
+
+def _get_or_create_chroma_collection(client, collection_name: str):
+    """`get_or_create_collection`, always with the same two settings, so
+    every call site creates an identical collection regardless of which
+    one happens to run first:
+      - `metadata={"hnsw:space": "cosine"}` -- Chroma's default distance
+        metric is L2, not cosine; see module docstring "ChromaDB
+        migration" for why silently keeping the default would have
+        changed ranking, not just storage.
+      - `embedding_function=None` -- this module always computes and
+        passes embeddings itself (`_get_embedder`); passing None here
+        stops Chroma from trying to construct its own default (ONNX/
+        HuggingFace-download-based) embedding function, which this
+        module never needs and which would be one more thing that could
+        fail to load for no benefit.
+    Re-opening an *existing* collection this way (confirmed empirically)
+    keeps its original data and its original `hnsw:space` setting --
+    this is not a destructive operation.
+    """
+    return client.get_or_create_collection(
+        name=collection_name, metadata={"hnsw:space": "cosine"}, embedding_function=None,
+    )
 
 
 def index_transactions_for_user(
     user_id: str,
     transactions: Optional[list[Transaction]] = None,
     db_path: str = db.DEFAULT_DB_PATH,
-    qdrant_path: str = DEFAULT_QDRANT_PATH,
+    chroma_path: str = DEFAULT_CHROMA_PATH,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
 ) -> int:
     """(Re)build the vector index for one user's transactions.
 
-    Returns the number of points indexed, or 0 if the ML dependencies are
-    not installed or not loadable (a warning-level no-op, not an error --
-    metadata and keyword search still work fully without this).
+    Returns the number of records indexed, or 0 if the ML dependencies
+    are not installed or not loadable (a warning-level no-op, not an
+    error -- metadata and keyword search still work fully without this).
     """
     embedder = _get_embedder(embedding_model)
-    client = _get_qdrant_client(qdrant_path)
+    client = _get_chroma_client(chroma_path)
     if embedder is None or client is None:
         return 0
-
-    from qdrant_client.http import models as qmodels  # noqa: PLC0415
 
     txs = transactions if transactions is not None else db.search_transactions(user_id, db_path=db_path)
     if not txs:
         return 0
 
-    collection = f"{COLLECTION_PREFIX}{user_id}"
-    vector_size = embedder.get_sentence_embedding_dimension()
-    if not client.collection_exists(collection):
-        client.create_collection(
-            collection_name=collection,
-            vectors_config=qmodels.VectorParams(size=vector_size, distance=qmodels.Distance.COSINE),
-        )
+    collection = _get_or_create_chroma_collection(client, f"{COLLECTION_PREFIX}{user_id}")
 
     texts = [f"{t.date} {t.description} {t.category} {t.amount}{t.currency}" for t in txs]
     vectors = embedder.encode(texts).tolist()
-    points = [
-        qmodels.PointStruct(
-            id=t.id if t.id is not None else i,
-            vector=vectors[i],
-            payload={"user_id": user_id, "date": t.date, "category": t.category,
-                     "account": t.account, "source_id": t.source_id or str(t.id)},
-        )
-        for i, t in enumerate(txs)
+    # Chroma ids must be strings (Qdrant's could be int|str) -- same id
+    # values as before (t.id if set, else the loop index), just str()'d.
+    ids = [str(t.id) if t.id is not None else str(i) for i, t in enumerate(txs)]
+    metadatas = [
+        {
+            "user_id": user_id, "date": t.date, "category": t.category or "",
+            "account": t.account or "", "source_id": t.source_id or str(t.id),
+        }
+        for t in txs
     ]
-    client.upsert(collection_name=collection, points=points)
-    return len(points)
+    collection.upsert(ids=ids, embeddings=vectors, metadatas=metadatas, documents=texts)
+    return len(ids)
 
 
 def _vector_search(
     user_id: str,
     query: str,
     candidate_ids: set[str],
-    qdrant_path: str,
+    chroma_path: str,
     embedding_model: str,
     limit: int,
 ) -> tuple[list[str], dict[str, float]]:
     """Best-effort dense vector search, scoped server-side to
-    `candidate_ids` via a Qdrant payload filter.
+    `candidate_ids` via a Chroma `where` metadata filter.
 
-    The pre-upgrade version of this code already called
-    `client.query_points(...)` (correctly avoiding `.search()`, which
-    `qdrant-client` has since removed) but with no `query_filter` -- it
-    fetched a fixed number of globally-ranked hits and filtered to the
-    candidate set *after the fact*, in Python. That's a real gap: for a
-    small candidate set inside a larger collection, a relevant item can
-    be missed entirely if it doesn't happen to fall within the top
-    `limit` *global* hits, even though it would easily be the best match
-    *within* the candidate set. Filtering inside the query itself doesn't
-    have that blind spot -- proven, not just asserted, by
-    `tests/test_rag_hybrid.py::test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit`.
+    The pre-migration Qdrant version of this code already scoped the
+    search server-side via a payload filter rather than fetching a fixed
+    number of globally-ranked hits and filtering to the candidate set
+    *after the fact* in Python -- that distinction (proven, not just
+    asserted, by
+    `tests/test_rag_hybrid.py::test_vector_search_finds_target_even_crowded_by_a_tiny_global_limit`)
+    carries over unchanged here via Chroma's `where={"source_id":
+    {"$in": [...]}}}`.
 
-    Returns ([], {}) -- never raises -- if the embedder or Qdrant client
+    What DID need care migrating (see module docstring "ChromaDB
+    migration" for the full reasoning, confirmed against a real embedded
+    Chroma index, not assumed):
+      - the collection is created with `metadata={"hnsw:space":
+        "cosine"}` (`_get_or_create_chroma_collection`) -- Chroma's
+        default distance metric is L2, not cosine, and silently keeping
+        the default would have changed *ranking*, not just storage;
+      - Chroma's `query()` returns cosine *distance* (lower = more
+        relevant), not similarity like Qdrant's `point.score` was
+        (higher = more relevant) -- `similarity = 1 - distance` below
+        converts back, so "higher `vector_score` is better" still holds
+        for every downstream reader exactly as before. Chroma's results
+        already come back nearest-first, so `ranked_ids`'s order needs
+        no equivalent conversion -- only the numeric score does.
+
+    Returns ([], {}) -- never raises -- if the embedder or Chroma client
     aren't available, the user's collection doesn't exist, or the search
     call fails for any reason (a broken/incompatible vector stack must
     degrade this stage, not crash retrieval). Called from a background
@@ -467,37 +543,36 @@ def _vector_search(
     if not candidate_ids:
         return [], {}
     embedder = _get_embedder(embedding_model)
-    client = _get_qdrant_client(qdrant_path)
+    client = _get_chroma_client(chroma_path)
     if embedder is None or client is None:
         return [], {}
 
-    collection = f"{COLLECTION_PREFIX}{user_id}"
+    collection_name = f"{COLLECTION_PREFIX}{user_id}"
     try:
-        from qdrant_client.http import models as qmodels  # noqa: PLC0415
-
-        if not client.collection_exists(collection):
+        try:
+            collection = client.get_collection(name=collection_name)
+        except Exception:  # noqa: BLE001 -- collection genuinely not existing yet is routine, not an error
             return [], {}
         query_vector = embedder.encode([query])[0].tolist()
-        response = client.query_points(
-            collection_name=collection,
-            query=query_vector,
-            limit=limit,
-            query_filter=qmodels.Filter(
-                must=[qmodels.FieldCondition(key="source_id", match=qmodels.MatchAny(any=list(candidate_ids)))]
-            ),
+        response = collection.query(
+            query_embeddings=[query_vector],
+            n_results=limit,
+            where={"source_id": {"$in": list(candidate_ids)}},
+            include=["metadatas", "distances"],
         )
-        points = response.points
     except Exception as exc:  # noqa: BLE001 -- a broken/incompatible/unavailable vector stack must degrade, not crash
         logger.info("Vector search unavailable or failed, falling back: %s", exc)
         return [], {}
 
     ranked_ids: list[str] = []
     scores: dict[str, float] = {}
-    for point in points:
-        source_id = (point.payload or {}).get("source_id")
+    result_metadatas = (response.get("metadatas") or [[]])[0]
+    result_distances = (response.get("distances") or [[]])[0]
+    for metadata, distance in zip(result_metadatas, result_distances):
+        source_id = (metadata or {}).get("source_id")
         if source_id and source_id in candidate_ids and source_id not in scores:
             ranked_ids.append(source_id)
-            scores[source_id] = float(point.score)
+            scores[source_id] = 1.0 - float(distance)  # distance -> similarity; see docstring above
     return ranked_ids, scores
 
 
@@ -528,7 +603,7 @@ def retrieve(
     account: Optional[str] = None,
     top_k: int = 20,
     db_path: str = db.DEFAULT_DB_PATH,
-    qdrant_path: str = DEFAULT_QDRANT_PATH,
+    chroma_path: str = DEFAULT_CHROMA_PATH,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     cross_encoder_model: str = DEFAULT_CROSS_ENCODER_MODEL,
     llm_client: Optional[LLMClient] = None,
@@ -538,6 +613,7 @@ def retrieve(
     enable_rerank: Optional[bool] = None,
     rerank_pool_size: int = DEFAULT_RERANK_POOL,
     cache: Optional[dict] = None,
+    precomputed_phrasings: Optional[list[str]] = None,
 ) -> RetrievalResult:
     """Hybrid retrieval entry point used by the Transaction/RAG Agent.
 
@@ -587,25 +663,42 @@ def retrieve(
     one cache dict across different users' turns or across a long-lived
     process: nothing here ever expires an entry, by design, since it's
     meant to live exactly as long as the caller's `dict` does.
+
+    `precomputed_phrasings`: Priority-2 call-count reduction (see
+    `schemas.RouterOutput.search_phrasings`). When given (a list, even an
+    empty one) AND `enable_query_rewrite`/`FINMATE_RAG_MODE` would
+    otherwise have allowed a rewrite call, these phrasings are used
+    directly and stage 2 makes NO call of its own -- the router already
+    did this job in the same call that classified intent, so redoing it
+    here would be a second LLM round-trip for the same output. None (the
+    default) preserves the exact old behavior: stage 2 calls
+    `finmate.query_rewrite.rewrite_query` itself, exactly as before this
+    parameter existed -- this is what every direct caller that doesn't
+    go through the orchestrator's router (`scripts/eval_rag.py`, the
+    tests in `tests/test_rag_hybrid.py`, any future caller) keeps getting.
+    `FINMATE_RAG_MODE=no_llm` still means stage 2 contributes nothing at
+    all, even router-sourced phrasings -- that env var's contract is "no
+    query augmentation happens," not just "no *extra* call happens."
     """
 
     def _compute() -> RetrievalResult:
         return _retrieve_impl(
             user_id=user_id, query=query, start_date=start_date, end_date=end_date, category=category,
-            account=account, top_k=top_k, db_path=db_path, qdrant_path=qdrant_path,
+            account=account, top_k=top_k, db_path=db_path, chroma_path=chroma_path,
             embedding_model=embedding_model, cross_encoder_model=cross_encoder_model, llm_client=llm_client,
             enable_query_rewrite=enable_query_rewrite, enable_keyword_search=enable_keyword_search,
             enable_vector_search=enable_vector_search, enable_rerank=enable_rerank,
-            rerank_pool_size=rerank_pool_size,
+            rerank_pool_size=rerank_pool_size, precomputed_phrasings=precomputed_phrasings,
         )
 
     if cache is None:
         return _compute()
 
     cache_key = (
-        user_id, query, start_date, end_date, category, account, top_k, db_path, qdrant_path,
+        user_id, query, start_date, end_date, category, account, top_k, db_path, chroma_path,
         embedding_model, cross_encoder_model, enable_query_rewrite, enable_keyword_search,
         enable_vector_search, enable_rerank, rerank_pool_size,
+        tuple(precomputed_phrasings) if precomputed_phrasings is not None else None,
     )
     cached = cache.get(cache_key)
     if cached is not None:
@@ -624,7 +717,7 @@ def _retrieve_impl(
     account: Optional[str],
     top_k: int,
     db_path: str,
-    qdrant_path: str,
+    chroma_path: str,
     embedding_model: str,
     cross_encoder_model: str,
     llm_client: Optional[LLMClient],
@@ -633,6 +726,7 @@ def _retrieve_impl(
     enable_vector_search: bool,
     enable_rerank: Optional[bool],
     rerank_pool_size: int,
+    precomputed_phrasings: Optional[list[str]] = None,
 ) -> RetrievalResult:
     """The pipeline itself -- see `retrieve`'s docstring for the full
     contract. Split out from `retrieve` only so `retrieve` can wrap it
@@ -669,16 +763,25 @@ def _retrieve_impl(
     if enable_vector_search:
         vector_future = _EXECUTOR.submit(
             _vector_search, user_id=user_id, query=query, candidate_ids=set(by_id),
-            qdrant_path=qdrant_path, embedding_model=embedding_model,
+            chroma_path=chroma_path, embedding_model=embedding_model,
             limit=max(top_k * 3, DEFAULT_VECTOR_FETCH_LIMIT),
         )
 
-    # --- Stage 2: optional query rewrite (<=1 LLM call) ---
+    # --- Stage 2: optional query rewrite (<=1 LLM call, or 0 if the
+    # router already supplied phrasings -- see `precomputed_phrasings`
+    # on `retrieve`) ---
     rag_mode = os.environ.get("FINMATE_RAG_MODE", "")
     want_rewrite = enable_query_rewrite if enable_query_rewrite is not None else (rag_mode.strip().lower() != "no_llm")
     rewrite_result = query_rewrite.QueryRewriteResult()
     if want_rewrite:
-        rewrite_result = query_rewrite.rewrite_query(user_id, query, llm_client=llm_client, mode=rag_mode or None)
+        if precomputed_phrasings is not None:
+            rewrite_result = query_rewrite.QueryRewriteResult(
+                phrasings=list(precomputed_phrasings),
+                used=bool(precomputed_phrasings),
+                note="" if precomputed_phrasings else "Router supplied no search phrasings for this query.",
+            )
+        else:
+            rewrite_result = query_rewrite.rewrite_query(user_id, query, llm_client=llm_client, mode=rag_mode or None)
     keyword_queries = [query, *rewrite_result.phrasings]
 
     # --- Stage 3: keyword search. One index build shared across every
