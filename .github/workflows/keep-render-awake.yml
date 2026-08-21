@@ -1,0 +1,32 @@
+name: Keep Render App Awake
+
+on:
+  schedule:
+    # Render free services spin down after inactivity; ping well before that window.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping Subarna on Render
+        env:
+          APP_URL: https://subarna.onrender.com/
+        run: |
+          status=$(curl --silent --show-error --location \
+            --connect-timeout 15 --max-time 90 \
+            --retry 3 --retry-all-errors --retry-delay 10 \
+            --output /dev/null --write-out '%{http_code}' \
+            "$APP_URL")
+
+          echo "HTTP status: $status"
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 400 ]; then
+            echo "Render app health check failed."
+            exit 1
+          fi
