@@ -6,7 +6,6 @@ import ReactMarkdown from "react-markdown";
 import { formatTime } from "@/lib/format";
 import type { ChatMessage } from "@/lib/types";
 
-import VerifiedStrip from "./VerifiedStrip";
 
 function ThinkingIndicator() {
   return (
@@ -65,7 +64,6 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
           )}
         </div>
         <span className="mt-1 px-1 text-[11px] text-mist">{formatTime(message.createdAt)}</span>
-        {!isUser && message.meta && <VerifiedStrip meta={message.meta} />}
       </div>
     </div>
   );
